@@ -5,9 +5,14 @@
 module Grammar
 
 public export
+data TypeSyntax : Type where
+  IntTypeSyntax : TypeSyntax
+  FuncTypeSyntax : TypeSyntax -> TypeSyntax -> TypeSyntax
+
+public export
 data Syntax : Type where
   IntLitSyntax : Int -> Syntax
   IdentSyntax : String -> Syntax
-  LambdaSyntax : String -> Syntax -> Syntax
+  LambdaSyntax : String -> Maybe TypeSyntax -> Syntax -> Syntax
   AppSyntax : Syntax -> Syntax -> Syntax
-  LetSyntax : String -> Syntax -> Syntax -> Syntax
+  LetSyntax : String -> Maybe TypeSyntax -> Syntax -> Syntax -> Syntax
