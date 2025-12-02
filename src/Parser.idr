@@ -13,13 +13,11 @@ record Parser a where
   constructor MkParser
   parse : List Char -> (Either Error (a, List Char))
 
--- Run a parser on a String and return either an error or the parsed value.
 parse : Parser a -> String -> Either Error a
 parse p str = case p.parse (unpack str) of
   Left err => Left err
   Right (x, xs) => Right x
 
--- Basic primitive
 satisfy : (Char -> Bool) -> Parser Char
 satisfy p = MkParser
   (\str => case str of
@@ -31,10 +29,13 @@ err : String -> Parser a
 err msg = MkParser (\_ => Left (Unexpected msg))
 
 -- Look at next character without consuming
-peek : Parser (Maybe Char)
-peek = MkParser (\str => case str of
-  [] => Right (Nothing, str)
-  (x :: xs) => Right (Just x, str))
+notP : Parser a -> Parser Unit
+notP p = MkParser (\str => case p.parse str of
+  Left err => Right ((), str)
+  Right (x, xs) => 
+    case str of
+      [] => Left (Unexpected "EOF")
+      (x :: xs) => Left (Unexpected $ pack [x]))
 
 -- Parse an exact character
 char : Char -> Parser Char
@@ -64,16 +65,15 @@ Monad Parser where
       Left err => Left err
       Right (y, ys) => Right (y, ys))
 
--- Parse an exact string
 sequence_ : List (Parser a) -> Parser ()
 sequence_ [] = pure ()
 sequence_ (p :: ps) = do _ <- p; sequence_ ps
 
+-- Parse an exact string
 stringP : String -> Parser String
 stringP s = do
   _ <- sequence_ (map char (unpack s))
   pure s
-
 
 -- One-or-more
 many1 : Parser a -> Parser (a, List a)
@@ -89,13 +89,11 @@ many0 p = MkParser (\str => case (many1 p).parse str of
   Left err => Right ([], str)
   Right ((x, xs), ys) => Right (x :: xs, ys))
 
--- Alternative
+-- either
 (<|>) : Parser a -> Parser a -> Parser a
 (<|>) p q = MkParser (\str => case p.parse str of
   Left _ => q.parse str
   Right (x, xs) => Right (x, xs))
-
--- Helpers for whitespace and tokens
 
 -- zero-or-more whitespace
 ws0 : Parser ()
@@ -107,65 +105,35 @@ ws1 = MkParser (\str => case (many1 (satisfy isSpace)).parse str of
   Left err => Left err
   Right (_, rest) => Right ((), rest))
 
--- Consume leading and trailing whitespace around a parser
-lexeme : Parser a -> Parser a
-lexeme p = do
-  _ <- ws0
-  x <- p
-  pure x
-
--- Parse a symbol (no word boundary rules)
-symbol : String -> Parser String
-symbol s = lexeme (stringP s)
-
--- End-of-input
 eof : Parser ()
 eof = MkParser (\str => case str of
   [] => Right ((), [])
   (x :: xs) => Left (Unexpected (pack [x])))
 
--- Identifiers and keywords
-
 identChar : Char -> Bool
 identChar c = isAlphaNum c || c == '_'
 
--- Identifier name (String), excluding reserved words
 parseIdentName : Parser String
-parseIdentName = lexeme $ do
+parseIdentName = do
   first <- satisfy isAlpha
   rest <- many0 (satisfy identChar)
-  let s = pack (first :: rest)
-  if s == "let" || s == "in"
-     then err "Unexpected reserved word"
-     else pure s
+  pure $ pack (first :: rest)
 
--- Reserved keyword with a word boundary: e.g., "let", "in"
 keyword : String -> Parser String
 keyword w = do
-  _ <- ws0
   _ <- stringP w
-  -- ensure next char is not an ident char (word boundary)
-  la <- peek
-  let checkBoundary : Parser ()
-      checkBoundary = case la of
-        Just c => if identChar c then err "Expected word boundary after keyword" else pure ()
-        Nothing => pure ()
-  _ <- checkBoundary
-  _ <- ws0
+  _ <- notP (satisfy identChar)
   pure w
 
--- Parentheses
 parens : Parser a -> Parser a
 parens p = do
-  _ <- symbol "("
+  _ <- char '('
   x <- p
-  _ <- symbol ")"
+  _ <- char ')'
   pure x
 
--- Literals and atomic terms
-
 parseIntLit : Parser Grammar.Syntax
-parseIntLit = lexeme $ do
+parseIntLit = do
   first <- satisfy isDigit
   digits <- many0 (satisfy isDigit)
   pure (Grammar.IntLitSyntax (cast (pack (first :: digits))))
@@ -182,15 +150,15 @@ parseAtom =
   <|> parseIntLit
   <|> parseIdent
 
--- Lambda: \x y z -> expr (desugared to nested lambdas)
+-- Lambda: \x y z. expr (desugared to nested lambdas)
 parseLambda : Parser Grammar.Syntax
 parseLambda = do
-  _ <- lexeme (char '\\')
-  args1 <- many1 parseIdentName
-  let collect : (String, List String) -> List String
-      collect (x, xs) = x :: xs
-  let args = collect args1
-  _ <- symbol "->"
+  _ <- char '\\'
+  (arg0, rest) <- many1 (ws0 >> parseIdentName)
+  let args = arg0 :: rest
+  _ <- ws0
+  _ <- char '.'
+  _ <- ws0
   body <- lazyP (\_ => parseExpr)
   let build : List String -> Grammar.Syntax -> Grammar.Syntax
       build [] acc = acc
@@ -202,7 +170,7 @@ parseLet : Parser Grammar.Syntax
 parseLet = do
   _ <- keyword "let"
   name <- parseIdentName
-  _ <- symbol "="
+  _ <- char '='
   val <- lazyP (\_ => parseExpr)
   _ <- keyword "in"
   body <- lazyP (\_ => parseExpr)
@@ -212,17 +180,18 @@ parseLet = do
 parseApp : Parser Grammar.Syntax
 parseApp = do
   f <- parseAtom
-  args <- many0 ((do _ <- ws1; parseAtom) <|> parens (lazyP (\_ => parseExpr)))
+  args <- many0 (ws1 >> parseAtom)
   pure (foldl Grammar.AppSyntax f args)
 
 -- Expression: let/lambda have lowest precedence; application higher; atoms highest
-parseExpr = parseLet <|> parseLambda <|> parseApp
+parseExpr = do
+  _ <- ws0
+  x <- parseLet <|> parseLambda <|> parseApp
+  _ <- ws0
+  pure x
 
--- Optional: a top-level program parser that requires complete consumption
 parseTop : Parser Grammar.Syntax
 parseTop = do
-  _ <- ws0
   e <- parseExpr
-  _ <- ws0
   _ <- eof
   pure e
