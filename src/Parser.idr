@@ -6,14 +6,14 @@ module Parser
 
 import Grammar
 
-data Error : Type where
-  Unexpected : String -> Error
+data ParseError : Type where
+  Unexpected : String -> ParseError
 
 record Parser a where
   constructor MkParser
-  parse : List Char -> (Either Error (a, List Char))
+  parse : List Char -> (Either ParseError (a, List Char))
 
-parse : Parser a -> String -> Either Error a
+parse : Parser a -> String -> Either ParseError a
 parse p str = case p.parse (unpack str) of
   Left err => Left err
   Right (x, xs) => Right x
@@ -137,7 +137,7 @@ parens p = do
   _ <- char ')'
   pure x
 
-parseIntLit : Parser Grammar.Syntax
+parseIntLit : Parser Grammar.TermSyntax
 parseIntLit = do
   first <- satisfy isDigit
   digits <- many0 (satisfy isDigit)
@@ -146,7 +146,7 @@ parseIntLit = do
 reserved : List String
 reserved = ["let", "in"]
 
-parseIdent : Parser Grammar.Syntax
+parseIdent : Parser Grammar.TermSyntax
 parseIdent = do
   name <- parseIdentName
   if elem name reserved
@@ -154,10 +154,10 @@ parseIdent = do
     else pure (Grammar.IdentSyntax name)
 
 -- Forward declarations (needed for recursive grammar)
-parseExpr : Parser Grammar.Syntax
+parseExpr : Parser Grammar.TermSyntax
 parseType : Parser Grammar.TypeSyntax
 
-parseAtom : Parser Grammar.Syntax
+parseAtom : Parser Grammar.TermSyntax
 parseAtom =
   parens (lazyP (\_ => parseExpr))
   <|> parseIntLit
@@ -179,7 +179,7 @@ parseParamAnnot = do
   pure (name, Just ty)
 
 -- Lambda: \x y z. expr (desugared to nested lambdas)
-parseLambda : Parser Grammar.Syntax
+parseLambda : Parser Grammar.TermSyntax
 parseLambda = do
   _ <- char '\\'
   (arg0, rest) <- many1 (ws0 >> (parseParamNoAnnot <|> parseParamAnnot))
@@ -188,13 +188,13 @@ parseLambda = do
   _ <- char '.'
   _ <- ws0
   body <- lazyP (\_ => parseExpr)
-  let build : List (String, Maybe Grammar.TypeSyntax) -> Grammar.Syntax -> Grammar.Syntax
+  let build : List (String, Maybe Grammar.TypeSyntax) -> Grammar.TermSyntax -> Grammar.TermSyntax
       build [] acc = acc
       build ((x, t) :: as) acc = Grammar.LambdaSyntax x t (build as acc)
   pure (build args body)
 
 -- Let binding: let x = a in b
-parseLet : Parser Grammar.Syntax
+parseLet : Parser Grammar.TermSyntax
 parseLet = do
   _ <- keyword "let"
   _ <- ws0
@@ -209,7 +209,7 @@ parseLet = do
   pure (Grammar.LetSyntax name t val body)
 
 -- Application: left-associative, allows juxtaposition only when next token is '('
-parseApp : Parser Grammar.Syntax
+parseApp : Parser Grammar.TermSyntax
 parseApp = do
   f <- parseAtom
   args <- many0 (ws1 >> parseAtom)
@@ -241,7 +241,7 @@ parseType = do
   pure (foldr Grammar.FuncTypeSyntax t rest)
 
 
-parseTop : Parser Grammar.Syntax
+parseTop : Parser Grammar.TermSyntax
 parseTop = do
   e <- parseExpr
   _ <- eof
