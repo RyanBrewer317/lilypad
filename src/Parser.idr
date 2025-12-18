@@ -6,14 +6,12 @@ module Parser
 
 import Grammar
 
-data ParseError : Type where
-  Unexpected : String -> ParseError
-
 record Parser a where
   constructor MkParser
-  parse : List Char -> (Either ParseError (a, List Char))
+  parse : List Char -> (Either Error (a, List Char))
 
-parse : Parser a -> String -> Either ParseError a
+public export
+parse : Parser a -> String -> Either Error a
 parse p str = case p.parse (unpack str) of
   Left err => Left err
   Right (x, xs) => Right x
@@ -21,12 +19,12 @@ parse p str = case p.parse (unpack str) of
 satisfy : (Char -> Bool) -> Parser Char
 satisfy p = MkParser
   (\str => case str of
-    [] => Left (Unexpected "Unexpected end of input")
-    (x :: xs) => if p x then Right (x, xs) else Left (Unexpected $ pack [x]))
+    [] => Left (SyntaxError "Unexpected end of input")
+    (x :: xs) => if p x then Right (x, xs) else Left (SyntaxError $ "unexpected " ++ pack [x]))
 
 -- Always fail with a message
 err : String -> Parser a
-err msg = MkParser (\_ => Left (Unexpected msg))
+err msg = MkParser (\_ => Left (SyntaxError msg))
 
 -- Look at next character without consuming
 notP : Parser a -> Parser Unit
@@ -34,8 +32,8 @@ notP p = MkParser (\str => case p.parse str of
   Left err => Right ((), str)
   Right (x, xs) => 
     case str of
-      [] => Left (Unexpected "EOF")
-      (x :: xs) => Left (Unexpected $ pack [x]))
+      [] => Left (SyntaxError "EOF")
+      (x :: xs) => Left (SyntaxError $ "unexpected " ++ pack [x]))
 
 -- Parse an exact character
 char : Char -> Parser Char
@@ -113,14 +111,14 @@ perhaps p = MkParser (\str => case p.parse str of
 eof : Parser ()
 eof = MkParser (\str => case str of
   [] => Right ((), [])
-  (x :: xs) => Left (Unexpected (pack [x])))
+  (x :: xs) => Left (SyntaxError ("unexpected " ++ pack [x])))
 
 identChar : Char -> Bool
 identChar c = isAlphaNum c || c == '_'
 
 parseIdentName : Parser String
 parseIdentName = do
-  first <- satisfy isAlpha
+  first <- satisfy isLower
   rest <- many0 (satisfy identChar)
   pure $ pack (first :: rest)
 
@@ -144,7 +142,7 @@ parseIntLit = do
   pure (Grammar.IntLitSyntax (cast (pack (first :: digits))))
 
 reserved : List String
-reserved = ["let", "in"]
+reserved = ["let", "in", "Int", "data", "fn"]
 
 parseIdent : Parser Grammar.TermSyntax
 parseIdent = do
@@ -155,45 +153,24 @@ parseIdent = do
 
 -- Forward declarations (needed for recursive grammar)
 parseExpr : Parser Grammar.TermSyntax
-parseType : Parser Grammar.TypeSyntax
+parseType : Parser Grammar.FunType
+
+parseCtorApp : Parser Grammar.TermSyntax
+parseCtorApp = do
+  first <- satisfy isUpper
+  rest <- many0 (satisfy identChar)
+  let name = pack (first :: rest)
+  args <- many0 (lazyP (\_ => parseExpr))
+  pure $ ConstructorAppSyntax name args
 
 parseAtom : Parser Grammar.TermSyntax
 parseAtom =
   parens (lazyP (\_ => parseExpr))
+  <|> parseCtorApp
   <|> parseIntLit
   <|> parseIdent
 
-parseParamNoAnnot : Parser (String, Maybe Grammar.TypeSyntax)
-parseParamNoAnnot = do
-  name <- parseIdentName
-  pure (name, Nothing)
-
-parseParamAnnot : Parser (String, Maybe Grammar.TypeSyntax)
-parseParamAnnot = do
-  _ <- char '('
-  name <- parseIdentName
-  _ <- char ':'
-  _ <- ws0
-  ty <- parseType
-  _ <- char ')'
-  pure (name, Just ty)
-
--- Lambda: \x y z. expr (desugared to nested lambdas)
-parseLambda : Parser Grammar.TermSyntax
-parseLambda = do
-  _ <- char '\\'
-  (arg0, rest) <- many1 (ws0 >> (parseParamNoAnnot <|> parseParamAnnot))
-  let args = arg0 :: rest
-  _ <- ws0
-  _ <- char '.'
-  _ <- ws0
-  body <- lazyP (\_ => parseExpr)
-  let build : List (String, Maybe Grammar.TypeSyntax) -> Grammar.TermSyntax -> Grammar.TermSyntax
-      build [] acc = acc
-      build ((x, t) :: as) acc = Grammar.LambdaSyntax x t (build as acc)
-  pure (build args body)
-
--- Let binding: let x = a in b
+-- Let binding: let x : T = a in b
 parseLet : Parser Grammar.TermSyntax
 parseLet = do
   _ <- keyword "let"
@@ -208,41 +185,110 @@ parseLet = do
   body <- lazyP (\_ => parseExpr)
   pure (Grammar.LetSyntax name t val body)
 
--- Application: left-associative, allows juxtaposition only when next token is '('
-parseApp : Parser Grammar.TermSyntax
-parseApp = do
-  f <- parseAtom
-  args <- many0 (ws1 >> parseAtom)
-  pure (foldl Grammar.AppSyntax f args)
-
--- Expression: let/lambda have lowest precedence; application higher; atoms highest
+-- Expression: let has lowest precedence, then atoms
 parseExpr = do
   _ <- ws0
-  x <- parseLet <|> parseLambda <|> parseApp
+  x <- parseLet <|> parseAtom
   _ <- ws0
   pure x
 
-parseIntType : Parser Grammar.TypeSyntax
-parseIntType = do 
+parseIntType : Parser Grammar.FunType
+parseIntType = do
   _ <- keyword "Int"
-  pure Grammar.IntTypeSyntax
+  pure Grammar.IntType
 
-parseTypeAtom : Parser Grammar.TypeSyntax
-parseTypeAtom = parens (lazyP (\_ => parseType)) <|> parseIntType
+parseUserType : Parser Grammar.FunType
+parseUserType = do
+  first <- satisfy isUpper
+  rest <- many0 $ satisfy identChar
+  let name = pack $ first :: rest
+  if elem name reserved
+    then err ("Reserved word: " ++ name)
+    else pure (Grammar.UserType name)
 
 parseType = do
   _ <- ws0
-  t <- parseTypeAtom
-  rest <- many0 $ do
-    _ <- ws0
-    _ <- stringP "->"
-    _ <- ws0
-    parseTypeAtom
-  pure (foldr Grammar.FuncTypeSyntax t rest)
+  t <- parseIntType <|> parseUserType
+  _ <- ws0
+  pure t
 
+-- Parse a parameter: name : Type or _name : Type
+parseParam : Parser (String, Grammar.FunType)
+parseParam = do
+  _ <- char '('
+  _ <- ws0
+  name <- parseIdentName
+  _ <- ws0
+  _ <- char ':'
+  t <- parseType
+  _ <- char ')'
+  pure (name, t)
 
-parseTop : Parser Grammar.TermSyntax
+-- Parse constructor: Name or Name Type1 Type2 ...
+parseConstructor : Parser (String, Grammar.GammaSyntax)
+parseConstructor = do
+  first <- satisfy isUpper
+  rest <- many0 $ satisfy identChar
+  let name = pack $ first :: rest
+  if elem name reserved then err name else pure ()
+  _ <- ws0
+  -- Parse zero or more types
+  types <- many0 (do
+    t <- parseType
+    _ <- ws0
+    pure ("", t))
+  pure (name, types)
+
+-- Parse data declaration: data Name = Cons1 | Cons2 | ...
+parseDataDecl : Parser Grammar.DeclSyntax
+parseDataDecl = do
+  _ <- keyword "data"
+  _ <- ws1
+  first <- satisfy isUpper
+  rest <- many0 (satisfy identChar)
+  let name = pack $ first :: rest
+  _ <- ws0
+  _ <- char '='
+  _ <- ws0
+  -- Parse first constructor
+  first <- parseConstructor
+  -- Parse remaining constructors (each preceded by |)
+  rest <- many0 (do
+    _ <- char '|'
+    _ <- ws0
+    parseConstructor)
+  pure (Grammar.DataDeclSyntax name (first :: rest))
+
+-- Parse function declaration: fn name (params) : RetType = body
+parseFuncDecl : Parser Grammar.DeclSyntax
+parseFuncDecl = do
+  _ <- keyword "fn"
+  _ <- ws1
+  name <- parseIdentName
+  -- Parse parameters in parentheses
+  params  <- many0 $ do
+    _ <- ws0
+    p <- parseParam
+    pure p
+  _ <- ws0
+  _ <- char ':'
+  retType <- parseType
+  _ <- char '='
+  body <- parseExpr
+  pure (Grammar.FuncDeclSyntax name params retType body)
+
+-- Parse a single declaration
+parseDecl : Parser Grammar.DeclSyntax
+parseDecl = parseDataDecl <|> parseFuncDecl
+
+public export
+parseTop : Parser (List Grammar.DeclSyntax)
 parseTop = do
-  e <- parseExpr
+  _ <- ws0
+  -- Parse zero or more declarations
+  decls <- many0 (do
+    d <- parseDecl
+    _ <- ws0
+    pure d)
   _ <- eof
-  pure e
+  pure decls
