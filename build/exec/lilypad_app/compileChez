@@ -1,0 +1,1 @@
+(parameterize ([optimize-level 3] [compile-file-message #f]) (compile-program "/Users/ryan/lilypad/build/exec/lilypad_app/lilypad.ss"))

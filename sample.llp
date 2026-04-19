@@ -1,0 +1,10 @@
+data MaybeInt = None | Some Int
+
+fn main (n : MaybeInt) : Int = 
+  case n of 
+    Some x {
+      x
+    } 
+    None {
+      2
+    }
