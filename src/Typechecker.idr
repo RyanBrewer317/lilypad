@@ -6,9 +6,9 @@ Theta : Type
 Theta = List FunDecl
 
 Renames : Type
-Renames = (Nat, List (String, Nat))
+Renames = (Int, List (String, Int))
 
-lookupRename : String -> Renames -> Either Error Nat
+lookupRename : String -> Renames -> Either Error Int
 lookupRename name renames = case renames of
   (_, []) => Left (SyntaxError $ "undefined variable " ++ name)
   (g, (n, idx) :: rest) => 
@@ -18,13 +18,13 @@ lookupRename name renames = case renames of
         lookupRename name (g, rest)
 
 extendRenames : String -> Renames -> Renames
-extendRenames name (g, rest) = (S g, (name, g) :: rest)
+extendRenames name (g, rest) = (1 + g, (name, g) :: rest)
 
-lookupGamma : Nat -> FunGamma -> FunType
+lookupGamma : Int -> FunGamma -> FunType
 lookupGamma n gamma = case (n, gamma) of
     (_, EmptyGamma) => lookupGamma n gamma -- this should be impossible
     (0, AddGamma _ t _) => t
-    (S n, AddGamma _ _ gamma) => lookupGamma n gamma
+    (_, AddGamma _ _ gamma) => lookupGamma (n - 1) gamma
 
 lookupTheta : String -> Theta -> Either Error FunDecl
 lookupTheta name theta = case theta of
@@ -48,9 +48,6 @@ infer_prod_type : Renames -> Theta -> FunGamma -> TermSyntax -> Either Error (Fu
 
 check_cons_type : Renames -> Theta -> FunGamma -> TermSyntax -> FunType -> Either Error FunConsumer
 infer_cons_type : Renames -> Theta -> FunGamma -> TermSyntax -> Either Error (FunConsumer, FunType)
-
-check_case_branches : Renames -> Theta -> FunGamma -> List (String, GammaSyntax, TermSyntax) -> FunType -> Either Error (List (String, FunArguments, FunProducer))
-infer_first_branch : Renames -> Theta -> FunGamma -> String -> List (String, GammaSyntax, TermSyntax) -> FunGamma -> Either Error FunType
 
 lookupConstructor : String -> Theta -> Either Error (FunGamma, FunType)
 lookupConstructor cname [] = Left $ TypeError ("constructor not found: " ++ cname)
@@ -80,55 +77,46 @@ infer_args_types renames theta gamma args = case args of
     (rest2, gamma2) <- infer_args_types renames theta gamma rest
     Right (ProdArgs arg2 rest2, AddGamma Positive argt gamma2)
 
+extendBranchVars : Renames -> FunGamma -> List String -> FunGamma -> (Renames, FunGamma)
+extendBranchVars renames gamma [] EmptyGamma = (renames, gamma)
+extendBranchVars renames gamma (varName :: restVars) (AddGamma pol typ restGamma) =
+  let renames2 = extendRenames varName renames
+      gamma2 = AddGamma pol typ gamma
+  in extendBranchVars renames2 gamma2 restVars restGamma
+extendBranchVars renames gamma _ _ = (renames, gamma) -- should be impossible I think?
+
 -- Find the branch for the given constructor name and infer its return type
+infer_first_branch : Renames -> Theta -> FunGamma -> String -> List (String, List String, TermSyntax) -> FunGamma -> Either Error FunType
 infer_first_branch renames theta gamma cname branches cGamma = case branches of
   [] => Left $ TypeError ("missing case branch for constructor " ++ cname)
   ((name, vars, body) :: rest) =>
     if name == cname then do
-      let (renames', gamma') = extendBranchVars renames gamma vars cGamma
-      (_, retType) <- infer_prod_type renames' theta gamma' body
+      let (renames2, gamma2) = extendBranchVars renames gamma vars cGamma
+      (_, retType) <- infer_prod_type renames2 theta gamma2 body
       Right retType
     else
       infer_first_branch renames theta gamma cname rest cGamma
-  where
-    extendBranchVars : Renames -> FunGamma -> GammaSyntax -> FunGamma -> (Renames, FunGamma)
-    extendBranchVars rens gam [] EmptyGamma = (rens, gam)
-    extendBranchVars rens gam ((varName, _) :: restVars) (AddGamma pol typ restGamma) =
-      let rens' = extendRenames varName rens
-          gam' = AddGamma pol typ gam
-          (rens'', gam'') = extendBranchVars rens' gam' restVars restGamma
-      in (rens'', gam'')
-    extendBranchVars rens gam _ _ = (rens, gam)
 
--- Check that all branches return the expected type
+check_case_branches : Renames -> Theta -> FunGamma -> List (String, List String, TermSyntax) -> FunType -> Either Error (List (String, FunArguments, FunProducer))
 check_case_branches renames theta gamma branches expectedType = case branches of
   [] => Right []
-  ((name, vars, body) :: rest) => do
+  ((name, (vars, body)) :: rest) => do
     branchResult <- case lookupConstructor name theta of
-      Right (cGamma, _) => do
-        let (renames', gamma') = extendBranchVars renames gamma vars cGamma
-        body2 <- check_prod_type renames' theta gamma' body expectedType
-        Right (name, varsToArgs (length vars) vars cGamma, body2)
+      Right (cGamma, x) => do
+        let (renames2, gamma2) = extendBranchVars renames gamma vars cGamma
+        body2 <- check_prod_type renames2 theta gamma2 body expectedType
+        Right (name, varsToArgs (cast $ length vars) vars cGamma, body2)
       Left err => Left err
     rest2 <- check_case_branches renames theta gamma rest expectedType
     Right (branchResult :: rest2)
   where
-    extendBranchVars : Renames -> FunGamma -> GammaSyntax -> FunGamma -> (Renames, FunGamma)
-    extendBranchVars rens gam [] EmptyGamma = (rens, gam)
-    extendBranchVars rens gam ((varName, _) :: restVars) (AddGamma pol typ restGamma) =
-      let rens' = extendRenames varName rens
-          gam' = AddGamma pol typ gam
-          (rens'', gam'') = extendBranchVars rens' gam' restVars restGamma
-      in (rens'', gam'')
-    extendBranchVars rens gam _ _ = (rens, gam)
-
     -- Convert pattern variables to FunArguments, with indices 0..n-1 where n is the number of vars
-    varsToArgs : Nat -> GammaSyntax -> FunGamma -> FunArguments
+    varsToArgs : Int -> List String -> FunGamma -> FunArguments
     varsToArgs _ [] EmptyGamma = NoArgs
     varsToArgs n (_ :: restVars) (AddGamma Positive _ restGamma) =
-      ProdArgs (IdentTerm (minus n 1)) (varsToArgs (minus n 1) restVars restGamma)
+      ProdArgs (IdentTerm (n - 1)) (varsToArgs (n - 1) restVars restGamma)
     varsToArgs n (_ :: restVars) (AddGamma Negative _ restGamma) =
-      ConsArgs (ContTerm (minus n 1)) (varsToArgs (minus n 1) restVars restGamma)
+      ConsArgs (ContTerm (n - 1)) (varsToArgs (n - 1) restVars restGamma)
     varsToArgs _ _ _ = NoArgs
 
 convertGammaSyntax : GammaSyntax -> FunGamma
@@ -142,13 +130,13 @@ checkDecl theta decl = case decl of
   CodataDeclSyntax _ _ => Left $ TypeError "Codata declarations not yet supported"
   FuncDeclSyntax name gamma retType body => do
     let gamma' = convertGammaSyntax gamma
-    let renames = (length gamma, reverse $ buildRenames 0 gamma)
+    let renames = (cast $ length gamma, reverse $ buildRenames 0 gamma)
     body' <- check_prod_type renames theta gamma' body retType
     Right $ FuncDecl name gamma' retType body'
   where
-    buildRenames : Nat -> GammaSyntax -> List (String, Nat)
+    buildRenames : Int -> GammaSyntax -> List (String, Int)
     buildRenames _ [] = []
-    buildRenames n ((varName, _) :: rest) = (varName, n) :: buildRenames (S n) rest
+    buildRenames n ((varName, _) :: rest) = (varName, n) :: buildRenames (1 + n) rest
 
 export
 checkProgram : List DeclSyntax -> Either Error (List FunDecl)
@@ -167,10 +155,6 @@ check_prod_type renames theta gamma arg expectedType = do
       Right term
     else
       Left $ TypeError ("Type mismatch: expected " ++ show expectedType ++ ", got " ++ show inferredType)
-  where
-    show : FunType -> String
-    show IntType = "Int"
-    show (UserType n) = n
 
 check_cons_type renames theta gamma arg expectedType = case arg of
   IdentSyntax s => do
@@ -181,10 +165,6 @@ check_cons_type renames theta gamma arg expectedType = case arg of
       else
         Left $ TypeError ("Type mismatch in continuation: expected " ++ show expectedType ++ ", got " ++ show inferredType)
   _ => Left $ TypeError "Only variables can be used as continuations"
-  where
-    show : FunType -> String
-    show IntType = "Int"
-    show (UserType n) = n
 
 infer_cons_type renames theta gamma arg = case arg of
   IdentSyntax s => do
@@ -194,7 +174,8 @@ infer_cons_type renames theta gamma arg = case arg of
 
 infer_prod_type renames theta gamma arg = case arg of
   IdentSyntax s => do
-    idx <- lookupRename s renames
+    rename <- lookupRename s renames
+    let idx = funGammaLen gamma - cast rename - 1
     Right (IdentTerm idx, lookupGamma idx gamma)
   IntLitSyntax n => Right (IntTerm n, IntType)
   LetSyntax s (Just t) v scope => do

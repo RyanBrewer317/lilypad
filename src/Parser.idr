@@ -22,7 +22,6 @@ satisfy p = MkParser
     [] => Left (SyntaxError "Unexpected end of input")
     (x :: xs) => if p x then Right (x, xs) else Left (SyntaxError $ "unexpected " ++ pack [x]))
 
--- Always fail with a message
 err : String -> Parser a
 err msg = MkParser (\_ => Left (SyntaxError msg))
 
@@ -32,7 +31,7 @@ notP p = MkParser (\str => case p.parse str of
   Left err => Right ((), str)
   Right (x, xs) => 
     case str of
-      [] => Left (SyntaxError "EOF")
+      [] => Left (SyntaxError "EOF") -- this case is fishy but I think it's right?
       (x :: xs) => Left (SyntaxError $ "unexpected " ++ pack [x]))
 
 -- Parse an exact character
@@ -63,15 +62,16 @@ Monad Parser where
       Left err => Left err
       Right (y, ys) => Right (y, ys))
 
-sequence_ : List (Parser a) -> Parser ()
-sequence_ [] = pure ()
-sequence_ (p :: ps) = do _ <- p; sequence_ ps
-
--- Parse an exact string
 stringP : String -> Parser String
 stringP s = do
-  _ <- sequence_ (map char (unpack s))
+  _ <- strHelp (map char (unpack s))
   pure s
+  where
+    strHelp : List (Parser Char) -> Parser ()
+    strHelp [] = pure ()
+    strHelp (p :: ps) = do
+      _ <- p
+      strHelp ps
 
 -- One-or-more
 many1 : Parser a -> Parser (a, List a)
@@ -142,18 +142,22 @@ parseIntLit = do
   pure (Grammar.IntLitSyntax (cast (pack (first :: digits))))
 
 reserved : List String
-reserved = ["let", "in", "Int", "data", "fn"]
+reserved = ["let", "in", "Int", "data", "fn", "case", "of"]
+
+-- Forward declarations, for mutual recursion
+parseExpr : Parser Grammar.TermSyntax
+parseType : Parser Grammar.FunType
 
 parseIdent : Parser Grammar.TermSyntax
 parseIdent = do
   name <- parseIdentName
   if elem name reserved
     then err ("Reserved word: " ++ name)
-    else pure (Grammar.IdentSyntax name)
-
--- Forward declarations (needed for recursive grammar)
-parseExpr : Parser Grammar.TermSyntax
-parseType : Parser Grammar.FunType
+    else do
+      args <- many0 (lazyP (\_=> parseExpr))
+      case args of
+        [] => pure (Grammar.IdentSyntax name)
+        _ => pure (GlobalAppSyntax name args)
 
 parseCtorApp : Parser Grammar.TermSyntax
 parseCtorApp = do
@@ -170,7 +174,6 @@ parseAtom =
   <|> parseIntLit
   <|> parseIdent
 
--- Let binding: let x : T = a in b
 parseLet : Parser Grammar.TermSyntax
 parseLet = do
   _ <- keyword "let"
@@ -185,10 +188,29 @@ parseLet = do
   body <- lazyP (\_ => parseExpr)
   pure (Grammar.LetSyntax name t val body)
 
--- Expression: let has lowest precedence, then atoms
+parseCase : Parser Grammar.TermSyntax
+parseCase = do
+  _ <- keyword "case"
+  scrutinee <- lazyP (\_=> parseExpr)
+  _ <- keyword "of"
+  branches <- many0 $ do
+    _ <- ws0
+    first <- satisfy isUpper
+    rest <- many0 (satisfy identChar)
+    let name = pack $ first :: rest
+    params <- many0 $ do
+      _ <- ws1
+      parseIdentName
+    _ <- ws0
+    _ <- char '{'
+    body <- lazyP (\_=> parseExpr)
+    _ <- char '}'
+    pure (name, params, body)
+  pure $ CaseSyntax scrutinee branches
+
 parseExpr = do
   _ <- ws0
-  x <- parseLet <|> parseAtom
+  x <- parseLet <|> parseCase <|> parseAtom
   _ <- ws0
   pure x
 

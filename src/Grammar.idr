@@ -22,7 +22,7 @@ data TermSyntax : Type where
   IdentSyntax : String -> TermSyntax
   GlobalAppSyntax : String -> List TermSyntax -> TermSyntax
   ConstructorAppSyntax : String -> List TermSyntax -> TermSyntax
-  CaseSyntax : TermSyntax -> List (String, GammaSyntax, TermSyntax) -> TermSyntax
+  CaseSyntax : TermSyntax -> List (String, List String, TermSyntax) -> TermSyntax
   ObjectSyntax : List (String, GammaSyntax, TermSyntax) -> TermSyntax
   MethodAppSyntax : TermSyntax -> String -> List TermSyntax -> TermSyntax
   LetSyntax : String -> Maybe FunType -> TermSyntax -> TermSyntax -> TermSyntax
@@ -37,7 +37,7 @@ mutual
   public export
   data FunProducer : Type where
     IntTerm : Int -> FunProducer
-    IdentTerm : Nat -> FunProducer
+    IdentTerm : Int -> FunProducer
     LetTerm : FunProducer -> FunProducer -> FunProducer
     GlobalAppTerm : String -> FunArguments -> FunProducer
     ConstructorAppTerm : String -> FunArguments -> FunProducer
@@ -46,7 +46,7 @@ mutual
     MethodAppTerm : FunProducer -> String -> FunArguments -> FunProducer
   public export
   data FunConsumer : Type where
-    ContTerm : Nat -> FunConsumer
+    ContTerm : Int -> FunConsumer
   public export
   data FunArguments : Type where
     NoArgs : FunArguments
@@ -61,6 +61,21 @@ mutual
     DataDecl : String -> List (String, FunGamma) -> FunDecl
     CodataDecl : String -> List (String, FunGamma, FunType) -> FunDecl
     FuncDecl : String -> FunGamma -> FunType -> FunProducer -> FunDecl
+
+public export
+Show FunType where
+  show IntType = "Int"
+  show (UserType s) = s
+
+public export
+Show FunGamma where
+  show EmptyGamma = "."
+  show (AddGamma _ t rest) = show t ++ ", " ++ show rest
+
+public export
+funGammaLen : FunGamma -> Int
+funGammaLen EmptyGamma = 0
+funGammaLen (AddGamma _ _ rest) = 1 + funGammaLen rest
 
 public export
 data Error : Type where
