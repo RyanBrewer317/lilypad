@@ -49,7 +49,7 @@ pub enum Syntax {
     Int(Pos, i64),
     Object(Pos, Option<String>, Vec<(String, Vec<String>, Syntax)>),
     Access(Pos, Box<Syntax>, String, Vec<Syntax>),
-    Module(Pos, String, Vec<(String, String, Syntax)>),
+    Module(Pos, String, Vec<(String, Vec<String>, Syntax)>),
 }
 impl Syntax {
     pub fn pos(&self) -> &Pos {
@@ -87,39 +87,45 @@ impl Pretty for Syntax {
 
 #[derive(Clone, Debug)]
 pub enum Term {
-    Ident(Pos, i64, String),
+    Local(Pos, i64, String),
+    Global(Pos, String, String),
+    Builtin(Pos, String),
     Int(Pos, i64),
-    Object(Pos, Option<String>, HashMap<String, (String, Term)>),
-    Access(Pos, Box<Term>, String),
+    Object(Pos, Option<String>, HashMap<String, (Vec<String>, Term)>),
+    Access(Pos, Box<Term>, String, Vec<Term>),
 }
 impl Term {
     pub fn pos(&self) -> &Pos {
         match self {
-            Term::Ident(pos, _, _) => pos,
+            Term::Local(pos, _, _) => pos,
+            Term::Global(pos, _, _) => pos,
+            Term::Builtin(pos, _) => pos,
             Term::Int(pos, _) => pos,
             Term::Object(pos, _, _) => pos,
-            Term::Access(pos, _, _) => pos,
+            Term::Access(pos, _, _, _) => pos,
         }
     }
 }
 impl Pretty for Term {
     fn pretty(self: &Self) -> String {
         match self {
-            Term::Ident(_, i, ident) => format!("{}{}", ident, i),
+            Term::Local(_, i, ident) => format!("{}{}", ident, i),
+            Term::Global(_, _, name) => format!("{}", name),
+            Term::Builtin(_, name) => format!("{}", name),
             Term::Int(_, i) => format!("{}", i),
             Term::Object(_, Some(name), _methods) => name.to_string(),
             Term::Object(_, None, methods) => {
                 "{".to_owned()
                     + &methods
                         .into_iter()
-                        .map(|(method, (this, def))| {
-                            this.to_string() + "." + &method + ": " + &def.pretty()
+                        .map(|(method, (params, def))| {
+                            method.to_string() + "(" + &params.join(", ") + "): " + &def.pretty()
                         })
                         .collect::<Vec<String>>()
                         .join(", ")
                     + "}"
             }
-            Term::Access(_, ob, method) => ob.pretty() + "." + &method,
+            Term::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(&|arg:&Term|arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
         }
     }
 }
@@ -137,3 +143,56 @@ impl<T> List<T> {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub enum Type {
+    Int,
+    Dynamic,
+    Object(Vec<(i64, String, Vec<String>, Type)>),
+    Union(Vec<Type>),
+}
+impl Type {
+    pub fn subtype(&self, other: &Type) -> bool {
+        match (self, other) {
+            (Type::Int, Type::Int) => true,
+            (_, Type::Dynamic) => true,
+            (Type::Object(methods), Type::Object(methods2)) => {
+                methods.iter().all(|(_, name, params, ty)| {
+                    methods2
+                        .iter()
+                        .any(|(_, name2, params2, ty2)| name == name2 && params.len() == params2.len() && ty.subtype(ty2))
+                })
+            }
+            (Type::Union(ts), t) => ts.iter().all(|t2| t2.subtype(t)),
+            (t, Type::Union(ts)) => ts.iter().any(|t2| t.subtype(t2)),
+            _ => false,
+        }
+    }
+    fn equiv(&self, other: &Type) -> bool {
+        self.subtype(other) && other.subtype(self)
+    }
+}
+impl Pretty for Type {
+    fn pretty(self: &Self) -> String {
+        match self {
+            Type::Int => "Int".to_owned(),
+            Type::Dynamic => "Dynamic".to_owned(),
+            Type::Object(methods) => {
+                "{".to_owned()
+                    + &methods
+                        .iter()
+                        .map(|(_i, name, params, ty)| format!("{}({}): {}", name, params.join(", "), ty.clone().pretty()))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                    + "}"
+            }
+            Type::Union(types) => types
+                .iter()
+                .map(|ty| ty.clone().pretty())
+                .collect::<Vec<String>>()
+                .join(" | "),
+        }
+    }
+}
+
+pub struct Warning(pub Pos, pub String);

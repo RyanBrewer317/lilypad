@@ -1,7 +1,6 @@
 mod common;
-use common::*;
 mod parser;
-use parser::*;
+mod typechecker;
 
 fn main() {
     println!("Hello, world!");

@@ -344,7 +344,7 @@ fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Vec<String>, Syntax))>, 
 }
 
 fn parse_decl<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
-    exact(data, "def")?;
+    exact(data, "fn")?;
     commit(data, &whitespace)?;
     let name = commit(data, &ident_string)?;
     let params = commit(data, &parse_params)?;
