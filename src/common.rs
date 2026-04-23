@@ -10,6 +10,11 @@ pub struct Pos {
     pub line: i32,
     pub col: i32,
 }
+impl Pretty for Pos {
+    fn pretty(self: &Self) -> String {
+        format!("{}:{}:{}", self.src_name, self.line, self.col)
+    }
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -47,9 +52,9 @@ impl Pretty for Error {
 pub enum Syntax {
     Ident(Pos, String),
     Int(Pos, i64),
-    Object(Pos, Option<String>, Vec<(String, Vec<String>, Syntax)>),
+    Object(Pos, Option<String>, Vec<(String, Vec<(String, Type)>, Syntax)>),
     Access(Pos, Box<Syntax>, String, Vec<Syntax>),
-    Module(Pos, String, Vec<(String, Vec<String>, Syntax)>),
+    Module(Pos, String, Vec<(String, Vec<(String, Type)>, Syntax)>),
 }
 impl Syntax {
     pub fn pos(&self) -> &Pos {
@@ -73,7 +78,8 @@ impl Pretty for Syntax {
                     + &methods
                         .into_iter()
                         .map(|(method, params, def)| {
-                            method.to_string() + "(" + &params.join(", ") + "): " + &def.pretty()
+                            let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty.pretty())).collect::<Vec<_>>().join(", ");
+                            method.to_string() + "(" + &params_str + "): " + &def.pretty()
                         })
                         .collect::<Vec<String>>()
                         .join(", ")
@@ -148,8 +154,7 @@ impl<T> List<T> {
 pub enum Type {
     Int,
     Dynamic,
-    Object(Vec<(i64, String, Vec<String>, Type)>),
-    Union(Vec<Type>),
+    Object(Vec<(String, Vec<String>, Type)>),
 }
 impl Type {
     pub fn subtype(&self, other: &Type) -> bool {
@@ -157,14 +162,12 @@ impl Type {
             (Type::Int, Type::Int) => true,
             (_, Type::Dynamic) => true,
             (Type::Object(methods), Type::Object(methods2)) => {
-                methods.iter().all(|(_, name, params, ty)| {
+                methods.iter().all(|(name, params, ty)| {
                     methods2
                         .iter()
-                        .any(|(_, name2, params2, ty2)| name == name2 && params.len() == params2.len() && ty.subtype(ty2))
+                        .any(|(name2, params2, ty2)| name == name2 && params.len() == params2.len() && ty.subtype(ty2))
                 })
-            }
-            (Type::Union(ts), t) => ts.iter().all(|t2| t2.subtype(t)),
-            (t, Type::Union(ts)) => ts.iter().any(|t2| t.subtype(t2)),
+            },
             _ => false,
         }
     }
@@ -181,16 +184,11 @@ impl Pretty for Type {
                 "{".to_owned()
                     + &methods
                         .iter()
-                        .map(|(_i, name, params, ty)| format!("{}({}): {}", name, params.join(", "), ty.clone().pretty()))
+                        .map(|(name, params, ty)| format!("{}({}): {}", name, params.join(", "), ty.clone().pretty()))
                         .collect::<Vec<String>>()
                         .join(", ")
                     + "}"
             }
-            Type::Union(types) => types
-                .iter()
-                .map(|ty| ty.clone().pretty())
-                .collect::<Vec<String>>()
-                .join(" | "),
         }
     }
 }

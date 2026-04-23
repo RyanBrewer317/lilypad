@@ -1,10 +1,5 @@
-data MaybeInt = None | Some Int
-
-fn main (n : MaybeInt) : Int = 
-  case n of 
-    Some x {
-      x
-    } 
-    None {
-      2
-    }
+fn main(n: {case(any): int}) : int =
+  n.case{
+    some(x: int) = x,
+    none = 2
+  }

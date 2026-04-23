@@ -18,7 +18,7 @@ fn satisfy<'p>(data: &mut ParserData<'p>, pred: &dyn Fn(char) -> bool) -> Parser
             data.pos = Pos {
                 src_name: data.pos.src_name.clone(),
                 line: data.pos.line + 1,
-                col: 0,
+                col: 1,
             };
             Ok(c)
         }
@@ -233,32 +233,35 @@ fn parse_num<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
     }
 }
 
-fn parse_params<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<String>> {
+fn parse_params<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Type)>> {
     many(data, &|d| {
         the_char(d, '(')?;
         whitespace0(d)?;
         let param = commit(d, &pattern_string)?;
         whitespace0(d)?;
+        let mb_ty = possible(d, &|d2| the_char(d2, ':'))?;
+        let ty = match mb_ty {
+            Some(_) => {
+                commit(d, &parse_type)? 
+            }
+            None => Type::Dynamic,
+        };
         commit(d, &|d2| the_char(d2, ')'))?;
-        Ok(param)
+        Ok((param, ty))
     })
 }
 
-fn parse_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec<String>, Syntax)>> {
+fn parse_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec<(String, Type)>, Syntax)>> {
     sep_by0(data, &|d| the_char(d, ','), &|d| {
         whitespace0(d)?;
         let method = ident_string(d)?;
         whitespace0(d)?;
         let mb_params = possible(d, &parse_params)?;
-        commit(d, &|d2| the_char(d2, ':'))?;
-        let def_pos = d.pos.clone();
+        whitespace0(d)?;
+        commit(d, &|d2| the_char(d2, '='))?;
         let def = commit(d, &parse_term)?;
         whitespace0(d)?;
-        let params = match mb_params {
-            Some(ps) => ps,
-            None => vec![]
-        };
-        Ok((method, params, def))
+        Ok((method, mb_params.unwrap_or_default(), def))
     })
 }
 
@@ -327,20 +330,67 @@ pub fn parse_term<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
 }
 
 enum Declaration {
-    Def(String, Vec<String>, Syntax),
+    Def(String, Vec<(String, Type)>, Type, Syntax),
     Import(Vec<String>),
 }
 
-fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Vec<String>, Syntax))>, Vec<Vec<String>>) {
+fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Vec<(String, Type)>, Type, Syntax))>, Vec<Vec<String>>) {
     let mut defs = vec![];
     let mut imports = vec![];
     for decl in decls {
         match decl {
-            Declaration::Def(name, params, def) => defs.push((name, (params, def))),
+            Declaration::Def(name, params, ret_ty, def) => defs.push((name, (params, ret_ty, def))),
             Declaration::Import(path) => imports.push(path),
         }
     }
     (defs, imports)
+}
+
+fn parse_type<'p>(data: &mut ParserData<'p>) -> ParserResult<Type> {
+    whitespace0(data)?;
+    let ty = one_of(data, &[&parse_object_type, &|d| {
+        let name = ident_string(d)?;
+        match name.as_str() {
+            "int" => Ok(Type::Int),
+            "any" => Ok(Type::Dynamic),
+            _ => Err(Error::ParseRecoverable(
+                d.pos.clone(),
+                None,
+                format!("Unknown type `{}`", name),
+            )),
+        }
+    }])?;
+    whitespace0(data)?;
+    Ok(ty)
+}
+
+fn parse_object_type<'p>(data: &mut ParserData<'p>) -> ParserResult<Type> {
+    the_char(data, '{')?;
+    let methods = parse_type_methods(data)?;
+    commit(data, &|d| the_char(d, '}'))?;
+    Ok(Type::Object(methods))
+}
+
+fn parse_type_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec<String>, Type)>> {
+    sep_by0(data, &|d| the_char(d, ','), &|d| {
+        whitespace0(d)?;
+        let name = ident_string(d)?;
+        whitespace0(d)?;
+        let mb_param_tys = possible(d, &|d2| {
+            the_char(d2, '(')?;
+            let tys = sep_by0(d2, &|d3| the_char(d3, ','), &|d3| {
+                let t = parse_type(d3)?;
+                Ok(t.pretty())
+            })?;
+            whitespace0(d2)?;
+            commit(d2, &|d3| the_char(d3, ')'))?;
+            Ok(tys)
+        })?;
+        whitespace0(d)?;
+        commit(d, &|d2| the_char(d2, ':'))?;
+        let ret = commit(d, &parse_type)?;
+        Ok((name, mb_param_tys.unwrap_or_default(), ret))
+    })
 }
 
 fn parse_decl<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
@@ -350,8 +400,10 @@ fn parse_decl<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
     let params = commit(data, &parse_params)?;
     whitespace0(data)?;
     commit(data, &|d| the_char(d, ':'))?;
+    let ret_ty = commit(data, &parse_type)?;
+    commit(data, &|d| the_char(d, '='))?;
     let body = commit(data, &parse_term)?;
-    Ok(Declaration::Def(name, params, body))
+    Ok(Declaration::Def(name, params, ret_ty, body))
 }
 
 fn parse_import<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
@@ -364,7 +416,7 @@ fn parse_import<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
 
 pub fn parse_file<'p>(
     data: &mut ParserData<'p>,
-) -> ParserResult<(HashMap<String, (Vec<String>, Syntax)>, Vec<Vec<String>>)> {
+) -> ParserResult<(HashMap<String, (Vec<(String, Type)>, Type, Syntax)>, Vec<Vec<String>>)> {
     let res = many(data, &|d| {
         whitespace0(d)?;
         one_of(d, &[&parse_decl, &parse_import])
