@@ -55,6 +55,7 @@ pub enum Syntax {
     Object(Pos, Option<String>, Vec<(String, Vec<(String, Type)>, Syntax)>),
     Access(Pos, Box<Syntax>, String, Vec<Syntax>),
     Call(Pos, String, Vec<Syntax>),
+    Let(Pos, String, Option<Type>, Box<Syntax>, Box<Syntax>),
 }
 impl Syntax {
     pub fn pos(&self) -> &Pos {
@@ -64,6 +65,7 @@ impl Syntax {
             Syntax::Object(pos, _, _) => pos,
             Syntax::Access(pos, _, _, _) => pos,
             Syntax::Call(pos, _, _) => pos,
+            Syntax::Let(pos, _, _, _, _) => pos,
         }
     }
 }
@@ -87,6 +89,10 @@ impl Pretty for Syntax {
             }
             Syntax::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(|arg|arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
             Syntax::Call(_, name, args) => name.to_string() + "(" + &args.into_iter().map(|arg| arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
+            Syntax::Let(_, name, ann, val, body) => match ann {
+                Some(ty) => format!("let {}: {} = {}; {}", name, ty.pretty(), val.pretty(), body.pretty()),
+                None => format!("let {} = {}; {}", name, val.pretty(), body.pretty()),
+            },
         }
     }
 }
@@ -99,6 +105,7 @@ pub enum Term {
     // methods: name -> (params with types, return type, body)
     Object(Pos, Option<String>, HashMap<String, (Vec<(String, Type)>, Type, Term)>),
     Access(Pos, Box<Term>, String, Vec<Term>),
+    Let(Pos, String, Type, Box<Term>, Box<Term>),
 }
 impl Term {
     pub fn pos(&self) -> &Pos {
@@ -108,6 +115,7 @@ impl Term {
             Term::Int(pos, _) => pos,
             Term::Object(pos, _, _) => pos,
             Term::Access(pos, _, _, _) => pos,
+            Term::Let(pos, _, _, _, _) => pos,
         }
     }
 }
@@ -134,6 +142,7 @@ impl Pretty for Term {
                     + "}"
             }
             Term::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(&|arg: &Term| arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
+            Term::Let(_, name, ty, val, body) => format!("let {}: {} = {}; {}", name, ty.pretty(), val.pretty(), body.pretty()),
         }
     }
 }

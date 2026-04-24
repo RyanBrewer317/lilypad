@@ -34,6 +34,17 @@ fn check<'f>(ctx: &Ctx<'f>, syntax: &Syntax, expected: &Type) -> Result<Term, Er
         let (term, _) = infer(ctx, syntax)?;
         return Ok(term);
     }
+    if let Syntax::Let(pos, name, ann, val_syn, body_syn) = syntax {
+        let (val_term, val_ty) = match ann {
+            Some(ty) => (check(ctx, val_syn, ty)?, ty.clone()),
+            None => infer(ctx, val_syn)?,
+        };
+        let mut locals = ctx.locals.clone();
+        locals.push((name.clone(), val_ty.clone()));
+        let inner_ctx = Ctx { locals, this_methods: ctx.this_methods.clone(), file_this_methods: ctx.file_this_methods };
+        let body_term = check(&inner_ctx, body_syn, expected)?;
+        return Ok(Term::Let(pos.clone(), name.clone(), val_ty, Box::new(val_term), Box::new(body_term)));
+    }
     if let (Syntax::Object(pos, name_opt, methods), Type::Object(exp_meths)) = (syntax, expected) {
         // Use exp_meths as inner this_methods so `this` inside these methods is typed correctly
         let checked = typecheck_methods(ctx, exp_meths, methods, Some(exp_meths))?;
@@ -96,6 +107,18 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
             let checked = typecheck_methods(ctx, &inner_this_methods, methods, None)?;
             let ty = object_type_of(&checked);
             Ok((Term::Object(pos.clone(), name_opt.clone(), checked), ty))
+        }
+
+        Syntax::Let(pos, name, ann, val_syn, body_syn) => {
+            let (val_term, val_ty) = match ann {
+                Some(ty) => (check(ctx, val_syn, ty)?, ty.clone()),
+                None => infer(ctx, val_syn)?,
+            };
+            let mut locals = ctx.locals.clone();
+            locals.push((name.clone(), val_ty.clone()));
+            let inner_ctx = Ctx { locals, this_methods: ctx.this_methods.clone(), file_this_methods: ctx.file_this_methods };
+            let (body_term, body_ty) = infer(&inner_ctx, body_syn)?;
+            Ok((Term::Let(pos.clone(), name.clone(), val_ty, Box::new(val_term), Box::new(body_term)), body_ty))
         }
 
         Syntax::Access(pos, obj_syn, method_name, arg_syns) => {

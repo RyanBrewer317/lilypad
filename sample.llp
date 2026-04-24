@@ -1,10 +1,12 @@
 import stdlib/test
 
-fn main(n: {case({some(any):int,none:int}): int}) : int =
+fn foo(n: {case({some(any):int,none:int}): int}): int =
+  let two: int = 2;
   n.case{
-    some(x) => main(n),
-    none => test.val(2)
+    some(x) => foo(n),
+    none => test.val(two)
   }
 
-
-  
+fn main(): int =
+  let none = {case(cases: {some(any): any, none: any}) => cases.none};
+  foo(none)

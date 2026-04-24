@@ -278,6 +278,24 @@ fn parse_parens<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
     Ok(t)
 }
 
+fn parse_let<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
+    let pos = data.pos.clone();
+    exact(data, "let")?;
+    commit(data, &whitespace)?;
+    let name = commit(data, &pattern_string)?;
+    whitespace0(data)?;
+    let ann = possible(data, &|d| {
+        the_char(d, ':')?;
+        commit(d, &parse_type)
+    })?;
+    whitespace0(data)?;
+    commit(data, &|d| the_char(d, '='))?;
+    let val = commit(data, &parse_term)?;
+    commit(data, &|d| the_char(d, ';'))?;
+    let body = commit(data, &parse_term)?;
+    Ok(Syntax::Let(pos, name, ann, Box::new(val), Box::new(body)))
+}
+
 fn parse_term_no_prefix<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
     whitespace0(data)?;
     let t = one_of(
@@ -286,6 +304,7 @@ fn parse_term_no_prefix<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
             &parse_parens,
             &parse_object,
             &parse_num,
+            &parse_let,
             &parse_ident_or_call,
         ],
     )?;
@@ -306,14 +325,20 @@ pub fn parse_term<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
         let method = commit(d, &ident_string)?;
         let with_object = possible(d, &parse_object)?;
         let args = match with_object {
-            Some(ob) => Ok(vec![ob]),
+            Some(ob) => vec![ob],
             None => {
-                the_char(d, '(')?;
-                let args = sep_by0(d, &|d2|the_char(d2,','), &parse_term)?;
-                the_char(d, ')')?;
-                Ok(args)
+                let mb_args = possible(d, &|d2| {
+                    the_char(d2, '(')?;
+                    let args = sep_by0(d2, &|d3| the_char(d3, ','), &parse_term)?;
+                    commit(d2, &|d3| the_char(d3, ')'))?;
+                    Ok(args)
+                })?;
+                match mb_args {
+                    Some(args) => args,
+                    None => vec![],
+                }
             }
-        }?;
+        };
         whitespace0(d)?;
         Ok(Postfix::Access(pos, method, args))
     })?;
