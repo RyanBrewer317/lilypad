@@ -20,7 +20,7 @@ impl Pretty for Pos {
 pub enum Error {
     Parse(Pos, Option<String>, String),
     ParseRecoverable(Pos, Option<String>, String),
-    Runtime(Pos, String),
+    Type(Pos, String),
 }
 impl Pretty for Error {
     fn pretty(self: &Self) -> String {
@@ -38,7 +38,7 @@ impl Pretty for Error {
             Error::ParseRecoverable(pos, expected, msg) => {
                 Error::Parse(pos.clone(), expected.clone(), msg.to_string()).pretty()
             }
-            Error::Runtime(pos, msg) => {
+            Error::Type(pos, msg) => {
                 format!(
                     "Runtime error. {} at `{}:{}:{}`.",
                     msg, pos.src_name, pos.line, pos.col
@@ -54,7 +54,7 @@ pub enum Syntax {
     Int(Pos, i64),
     Object(Pos, Option<String>, Vec<(String, Vec<(String, Type)>, Syntax)>),
     Access(Pos, Box<Syntax>, String, Vec<Syntax>),
-    Module(Pos, String, Vec<(String, Vec<(String, Type)>, Syntax)>),
+    Call(Pos, String, Vec<Syntax>),
 }
 impl Syntax {
     pub fn pos(&self) -> &Pos {
@@ -63,7 +63,7 @@ impl Syntax {
             Syntax::Int(pos, _) => pos,
             Syntax::Object(pos, _, _) => pos,
             Syntax::Access(pos, _, _, _) => pos,
-            Syntax::Module(pos, _, _) => pos,
+            Syntax::Call(pos, _, _) => pos,
         }
     }
 }
@@ -86,7 +86,7 @@ impl Pretty for Syntax {
                     + "}"
             }
             Syntax::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(|arg|arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
-            Syntax::Module(_, name, _) => name.to_string(),
+            Syntax::Call(_, name, args) => name.to_string() + "(" + &args.into_iter().map(|arg| arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
         }
     }
 }
@@ -94,7 +94,6 @@ impl Pretty for Syntax {
 #[derive(Clone, Debug)]
 pub enum Term {
     Local(Pos, i64, String),
-    Global(Pos, String, String),
     Builtin(Pos, String),
     Int(Pos, i64),
     // methods: name -> (params with types, return type, body)
@@ -105,7 +104,6 @@ impl Term {
     pub fn pos(&self) -> &Pos {
         match self {
             Term::Local(pos, _, _) => pos,
-            Term::Global(pos, _, _) => pos,
             Term::Builtin(pos, _) => pos,
             Term::Int(pos, _) => pos,
             Term::Object(pos, _, _) => pos,
@@ -117,7 +115,6 @@ impl Pretty for Term {
     fn pretty(self: &Self) -> String {
         match self {
             Term::Local(_, i, ident) => format!("{}{}", ident, i),
-            Term::Global(_, _, name) => format!("{}", name),
             Term::Builtin(_, name) => format!("{}", name),
             Term::Int(_, i) => format!("{}", i),
             Term::Object(_, Some(name), _methods) => name.to_string(),
@@ -137,20 +134,6 @@ impl Pretty for Term {
                     + "}"
             }
             Term::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(&|arg: &Term| arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum List<T> {
-    Nil,
-    Cons(T, Rc<List<T>>),
-}
-impl<T> List<T> {
-    pub fn cons(self: &Self) -> Option<(&T, &Rc<List<T>>)> {
-        match self {
-            List::Nil => None,
-            List::Cons(x, xs) => Some((x, xs)),
         }
     }
 }
@@ -183,9 +166,6 @@ impl Type {
             _ => false,
         }
     }
-    pub fn equiv(&self, other: &Type) -> bool {
-        self.subtype(other) && other.subtype(self)
-    }
 }
 impl Pretty for Type {
     fn pretty(self: &Self) -> String {
@@ -207,5 +187,3 @@ impl Pretty for Type {
         }
     }
 }
-
-pub struct Warning(pub Pos, pub String);

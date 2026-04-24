@@ -200,21 +200,20 @@ fn pattern_string<'p>(data: &mut ParserData<'p>) -> ParserResult<String> {
     )
 }
 
-fn escaped<'p>(data: &mut ParserData<'p>) -> ParserResult<char> {
-    the_char(data, '\\')?;
-    let c = commit(data, &|d| satisfy(d, &|_c| true))?;
-    match c {
-        'n' => Ok('\n'),
-        't' => Ok('\t'),
-        'r' => Ok('\r'),
-        _ => Ok(c),
-    }
-}
-
-fn parse_ident_or_lambda<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
+fn parse_ident_or_call<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
     let pos = data.pos.clone();
     let ident = ident_string(data)?;
-    Ok(Syntax::Ident(pos, ident))
+    let mb_args = possible(data, &|d| {
+        the_char(d, '(')?;
+        let args = sep_by0(d, &|d2| the_char(d2, ','), &parse_term)?;
+        commit(d, &|d2| the_char(d2, ')'))?;
+        Ok(args)
+    })?;
+    if let Some(args) = mb_args {
+        Ok(Syntax::Call(pos, ident, args))
+    } else {
+        Ok(Syntax::Ident(pos, ident))
+    }
 }
 
 fn parse_num<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
@@ -287,7 +286,7 @@ fn parse_term_no_prefix<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
             &parse_parens,
             &parse_object,
             &parse_num,
-            &parse_ident_or_lambda,
+            &parse_ident_or_call,
         ],
     )?;
     whitespace0(data)?;

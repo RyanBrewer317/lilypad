@@ -1,22 +1,18 @@
 use crate::common::*;
 use std::collections::HashMap;
 
-struct Ctx {
+struct Ctx<'f> {
     // De Bruijn levels: index 0 = first param, higher = deeper
     locals: Vec<(String, Type)>,
     // Methods of the enclosing object; always the content of a Type::Object
     this_methods: Vec<(String, Vec<Type>, Type)>,
+    // Methods of the file-level object; reference so it's never cloned
+    file_this_methods: &'f [(String, Vec<Type>, Type)],
 }
 
-impl Ctx {
+impl<'f> Ctx<'f> {
     fn this_ty(&self) -> Type {
         Type::Object(self.this_methods.clone())
-    }
-
-    fn with_locals(&self, params: &[(String, Type)]) -> Ctx {
-        let mut locals = self.locals.clone();
-        locals.extend_from_slice(params);
-        Ctx { locals, this_methods: self.this_methods.clone() }
     }
 
     fn lookup_local(&self, name: &str) -> Option<(i64, &Type)> {
@@ -28,23 +24,24 @@ impl Ctx {
         None
     }
 
-    fn lookup_this_method(&self, name: &str) -> Option<&(String, Vec<Type>, Type)> {
-        self.this_methods.iter().find(|(n, _, _)| n == name)
+    fn lookup_file_this_method(&self, name: &str) -> Option<&(String, Vec<Type>, Type)> {
+        self.file_this_methods.iter().find(|(n, _, _)| n == name)
     }
 }
 
-fn check(ctx: &Ctx, syntax: &Syntax, expected: &Type) -> Result<Term, Error> {
+fn check<'f>(ctx: &Ctx<'f>, syntax: &Syntax, expected: &Type) -> Result<Term, Error> {
     if matches!(expected, Type::Dynamic) {
         let (term, _) = infer(ctx, syntax)?;
         return Ok(term);
     }
     if let (Syntax::Object(pos, name_opt, methods), Type::Object(exp_meths)) = (syntax, expected) {
-        let checked = typecheck_methods(ctx, methods, Some(exp_meths))?;
+        // Use exp_meths as inner this_methods so `this` inside these methods is typed correctly
+        let checked = typecheck_methods(ctx, exp_meths, methods, Some(exp_meths))?;
         return Ok(Term::Object(pos.clone(), name_opt.clone(), checked));
     }
     let (term, got) = infer(ctx, syntax)?;
     if !got.subtype(expected) {
-        return Err(Error::Runtime(
+        return Err(Error::Type(
             syntax.pos().clone(),
             format!("type mismatch: expected `{}`, got `{}`", expected.pretty(), got.pretty()),
         ));
@@ -52,7 +49,7 @@ fn check(ctx: &Ctx, syntax: &Syntax, expected: &Type) -> Result<Term, Error> {
     Ok(term)
 }
 
-fn infer(ctx: &Ctx, syntax: &Syntax) -> Result<(Term, Type), Error> {
+fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
     match syntax {
         Syntax::Int(pos, i) => Ok((Term::Int(pos.clone(), *i), Type::Int)),
 
@@ -61,29 +58,44 @@ fn infer(ctx: &Ctx, syntax: &Syntax) -> Result<(Term, Type), Error> {
                 Ok((Term::Local(pos.clone(), idx, name.clone()), ty.clone()))
             } else if name == "this" {
                 Ok((Term::Builtin(pos.clone(), "this".to_string()), ctx.this_ty()))
-            } else if let Some((_, params, ret_ty)) = ctx.lookup_this_method(name) {
-                // Desugar bare name to `this.name()` for zero-arg methods on `this`
+            } else if let Some((_, params, ret_ty)) = ctx.lookup_file_this_method(name) {
+                // Desugar bare name to `file_this.name()` for zero-arg file-level methods
                 if params.is_empty() {
-                    let this_term = Term::Builtin(pos.clone(), "this".to_string());
-                    Ok((Term::Access(pos.clone(), Box::new(this_term), name.clone(), vec![]), ret_ty.clone()))
+                    let file_this = Term::Builtin(pos.clone(), "file_this".to_string());
+                    Ok((Term::Access(pos.clone(), Box::new(file_this), name.clone(), vec![]), ret_ty.clone()))
                 } else {
-                    Err(Error::Runtime(pos.clone(), format!("unbound variable `{}`", name)))
+                    Err(Error::Type(pos.clone(), format!("unbound variable `{}`", name)))
                 }
             } else {
-                Err(Error::Runtime(pos.clone(), format!("unbound variable `{}`", name)))
+                Err(Error::Type(pos.clone(), format!("unbound variable `{}`", name)))
             }
         }
 
-        Syntax::Object(pos, name_opt, methods) => {
-            let checked = typecheck_methods(ctx, methods, None)?;
-            let ty = object_type_of(&checked);
-            Ok((Term::Object(pos.clone(), name_opt.clone(), checked), ty))
+        Syntax::Call(pos, name, arg_syns) => {
+            let (_, param_tys, ret_ty) = ctx.lookup_file_this_method(name)
+                .ok_or_else(|| Error::Type(pos.clone(), format!("unbound function `{}`", name)))?
+                .clone();
+            if arg_syns.len() != param_tys.len() {
+                return Err(Error::Type(
+                    pos.clone(),
+                    format!("function `{}` expects {} arg(s), got {}", name, param_tys.len(), arg_syns.len()),
+                ));
+            }
+            let args = arg_syns.iter().zip(param_tys.iter())
+                .map(|(a, pt)| check(ctx, a, pt))
+                .collect::<Result<Vec<_>, _>>()?;
+            let file_this = Term::Builtin(pos.clone(), "file_this".to_string());
+            Ok((Term::Access(pos.clone(), Box::new(file_this), name.clone(), args), ret_ty))
         }
 
-        Syntax::Module(pos, name, methods) => {
-            let checked = typecheck_methods(ctx, methods, None)?;
+        Syntax::Object(pos, name_opt, methods) => {
+            // Approximate inner this_methods with Dynamic return types since returns aren't declared
+            let inner_this_methods: Vec<(String, Vec<Type>, Type)> = methods.iter()
+                .map(|(name, params, _)| (name.clone(), params.iter().map(|(_, t)| t.clone()).collect(), Type::Dynamic))
+                .collect();
+            let checked = typecheck_methods(ctx, &inner_this_methods, methods, None)?;
             let ty = object_type_of(&checked);
-            Ok((Term::Object(pos.clone(), Some(name.clone()), checked), ty))
+            Ok((Term::Object(pos.clone(), name_opt.clone(), checked), ty))
         }
 
         Syntax::Access(pos, obj_syn, method_name, arg_syns) => {
@@ -98,13 +110,13 @@ fn infer(ctx: &Ctx, syntax: &Syntax) -> Result<(Term, Type), Error> {
                 Type::Object(method_tys) => {
                     let (_, param_tys, ret_ty) = method_tys.iter()
                         .find(|(n, _, _)| n == method_name)
-                        .ok_or_else(|| Error::Runtime(
+                        .ok_or_else(|| Error::Type(
                             pos.clone(),
                             format!("method `{}` not found on `{}`", method_name, obj_ty.pretty()),
                         ))?
                         .clone();
                     if arg_syns.len() != param_tys.len() {
-                        return Err(Error::Runtime(
+                        return Err(Error::Type(
                             pos.clone(),
                             format!("method `{}` expects {} arg(s), got {}", method_name, param_tys.len(), arg_syns.len()),
                         ));
@@ -114,7 +126,7 @@ fn infer(ctx: &Ctx, syntax: &Syntax) -> Result<(Term, Type), Error> {
                         .collect::<Result<Vec<_>, _>>()?;
                     Ok((Term::Access(pos.clone(), Box::new(obj_term), method_name.clone(), args), ret_ty))
                 }
-                _ => Err(Error::Runtime(
+                _ => Err(Error::Type(
                     pos.clone(),
                     format!("cannot call method on `{}`", obj_ty.pretty()),
                 )),
@@ -123,14 +135,17 @@ fn infer(ctx: &Ctx, syntax: &Syntax) -> Result<(Term, Type), Error> {
     }
 }
 
-fn typecheck_methods(
-    ctx: &Ctx,
+fn typecheck_methods<'f>(
+    ctx: &Ctx<'f>,
+    inner_this_methods: &[(String, Vec<Type>, Type)],
     methods: &[(String, Vec<(String, Type)>, Syntax)],
     expected_methods: Option<&Vec<(String, Vec<Type>, Type)>>,
 ) -> Result<HashMap<String, (Vec<(String, Type)>, Type, Term)>, Error> {
     let mut out = HashMap::new();
     for (method_name, params, body) in methods {
-        let inner_ctx = ctx.with_locals(params);
+        let mut locals = ctx.locals.clone();
+        locals.extend_from_slice(params);
+        let inner_ctx = Ctx { locals, this_methods: inner_this_methods.to_vec(), file_this_methods: ctx.file_this_methods };
         let (body_term, ret_ty) = if let Some(exp_meths) = expected_methods {
             if let Some((_, _, exp_ret)) = exp_meths.iter().find(|(n, _, _)| n == method_name) {
                 let t = check(&inner_ctx, body, exp_ret)?;
@@ -178,11 +193,11 @@ pub fn typecheck_file(
         this_methods.push((import_name.clone(), vec![], import_ty.clone()));
     }
 
-    let base_ctx = Ctx { locals: vec![], this_methods };
-
     let mut out = HashMap::new();
     for (name, (params, ret_ty, body)) in defs {
-        let ctx = base_ctx.with_locals(params);
+        let mut locals = vec![];
+        locals.extend_from_slice(params);
+        let ctx = Ctx { locals, this_methods: this_methods.clone(), file_this_methods: &this_methods };
         let body_term = check(&ctx, body, ret_ty)?;
         out.insert(name.clone(), (params.clone(), ret_ty.clone(), body_term));
     }

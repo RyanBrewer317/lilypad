@@ -1,7 +1,7 @@
 import stdlib/test
 
-fn main(n: {case({some(any):int,none:int}): int}) : int =
-  n.case{
-    some(x) => x,
-    none => test.val()
-  }
+fn main(n: {pick({some(any):int,none:int}): int}) : int =
+  n.pick({
+    some(x) => main(n),
+    none => test.val(2)
+  })
