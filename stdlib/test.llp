@@ -1,0 +1,3 @@
+fn val(): int = 2
+
+fn val2(): int = 3

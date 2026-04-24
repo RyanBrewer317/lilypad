@@ -234,21 +234,20 @@ fn parse_num<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
 }
 
 fn parse_params<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Type)>> {
-    many(data, &|d| {
-        the_char(d, '(')?;
+    the_char(data, '(')?;
+    let params = sep_by0(data, &|d| the_char(d, ','), &|d| {
         whitespace0(d)?;
-        let param = commit(d, &pattern_string)?;
+        let param = pattern_string(d)?;
         whitespace0(d)?;
         let mb_ty = possible(d, &|d2| the_char(d2, ':'))?;
         let ty = match mb_ty {
-            Some(_) => {
-                commit(d, &parse_type)? 
-            }
+            Some(_) => parse_type(d)?,
             None => Type::Dynamic,
         };
-        commit(d, &|d2| the_char(d2, ')'))?;
         Ok((param, ty))
-    })
+    })?;
+    commit(data, &|d2| the_char(d2, ')'))?;
+    Ok(params)
 }
 
 fn parse_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec<(String, Type)>, Syntax)>> {
@@ -258,7 +257,7 @@ fn parse_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec
         whitespace0(d)?;
         let mb_params = possible(d, &parse_params)?;
         whitespace0(d)?;
-        commit(d, &|d2| the_char(d2, '='))?;
+        commit(d, &|d2| exact(d2, "=>"))?;
         let def = commit(d, &parse_term)?;
         whitespace0(d)?;
         Ok((method, mb_params.unwrap_or_default(), def))
@@ -371,17 +370,14 @@ fn parse_object_type<'p>(data: &mut ParserData<'p>) -> ParserResult<Type> {
     Ok(Type::Object(methods))
 }
 
-fn parse_type_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec<String>, Type)>> {
+fn parse_type_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String, Vec<Type>, Type)>> {
     sep_by0(data, &|d| the_char(d, ','), &|d| {
         whitespace0(d)?;
         let name = ident_string(d)?;
         whitespace0(d)?;
         let mb_param_tys = possible(d, &|d2| {
             the_char(d2, '(')?;
-            let tys = sep_by0(d2, &|d3| the_char(d3, ','), &|d3| {
-                let t = parse_type(d3)?;
-                Ok(t.pretty())
-            })?;
+            let tys = sep_by0(d2, &|d3| the_char(d3, ','), &|d3| parse_type(d3))?;
             whitespace0(d2)?;
             commit(d2, &|d3| the_char(d3, ')'))?;
             Ok(tys)
@@ -397,7 +393,7 @@ fn parse_decl<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
     exact(data, "fn")?;
     commit(data, &whitespace)?;
     let name = commit(data, &ident_string)?;
-    let params = commit(data, &parse_params)?;
+    let params = parse_params(data)?;
     whitespace0(data)?;
     commit(data, &|d| the_char(d, ':'))?;
     let ret_ty = commit(data, &parse_type)?;

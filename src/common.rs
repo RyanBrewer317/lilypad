@@ -97,7 +97,8 @@ pub enum Term {
     Global(Pos, String, String),
     Builtin(Pos, String),
     Int(Pos, i64),
-    Object(Pos, Option<String>, HashMap<String, (Vec<String>, Term)>),
+    // methods: name -> (params with types, return type, body)
+    Object(Pos, Option<String>, HashMap<String, (Vec<(String, Type)>, Type, Term)>),
     Access(Pos, Box<Term>, String, Vec<Term>),
 }
 impl Term {
@@ -124,14 +125,18 @@ impl Pretty for Term {
                 "{".to_owned()
                     + &methods
                         .into_iter()
-                        .map(|(method, (params, def))| {
-                            method.to_string() + "(" + &params.join(", ") + "): " + &def.pretty()
+                        .map(|(method, (params, ret_ty, def))| {
+                            let params_str = params.iter()
+                                .map(|(n, t)| format!("{}: {}", n, t.pretty()))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("{}({}): {} = {}", method, params_str, ret_ty.pretty(), def.pretty())
                         })
                         .collect::<Vec<String>>()
                         .join(", ")
                     + "}"
             }
-            Term::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(&|arg:&Term|arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
+            Term::Access(_, ob, method, args) => ob.pretty() + "." + &method + "(" + &args.into_iter().map(&|arg: &Term| arg.pretty()).collect::<Vec<_>>().join(", ") + ")",
         }
     }
 }
@@ -154,24 +159,31 @@ impl<T> List<T> {
 pub enum Type {
     Int,
     Dynamic,
-    Object(Vec<(String, Vec<String>, Type)>),
+    // methods: (name, param types, return type)
+    Object(Vec<(String, Vec<Type>, Type)>),
 }
 impl Type {
     pub fn subtype(&self, other: &Type) -> bool {
         match (self, other) {
             (Type::Int, Type::Int) => true,
             (_, Type::Dynamic) => true,
+            (Type::Dynamic, _) => true,
             (Type::Object(methods), Type::Object(methods2)) => {
-                methods.iter().all(|(name, params, ty)| {
-                    methods2
-                        .iter()
-                        .any(|(name2, params2, ty2)| name == name2 && params.len() == params2.len() && ty.subtype(ty2))
+                // self <: other: self must implement every method other requires,
+                // with contravariant params and covariant return type
+                methods2.iter().all(|(name2, params2, ret2)| {
+                    methods.iter().any(|(name, params, ret)| {
+                        name == name2
+                            && params.len() == params2.len()
+                            && params2.iter().zip(params.iter()).all(|(p2, p)| p2.subtype(p))
+                            && ret.subtype(ret2)
+                    })
                 })
-            },
+            }
             _ => false,
         }
     }
-    fn equiv(&self, other: &Type) -> bool {
+    pub fn equiv(&self, other: &Type) -> bool {
         self.subtype(other) && other.subtype(self)
     }
 }
@@ -184,7 +196,10 @@ impl Pretty for Type {
                 "{".to_owned()
                     + &methods
                         .iter()
-                        .map(|(name, params, ty)| format!("{}({}): {}", name, params.join(", "), ty.clone().pretty()))
+                        .map(|(name, params, ty)| {
+                            let params_str = params.iter().map(|p| p.pretty()).collect::<Vec<_>>().join(", ");
+                            format!("{}({}): {}", name, params_str, ty.pretty())
+                        })
                         .collect::<Vec<String>>()
                         .join(", ")
                     + "}"

@@ -1,20 +1,42 @@
-use std::fs::read_to_string;
+use std::{collections::HashMap, fs::read_to_string};
 
 mod common;
 use crate::common::*;
 mod parser;
+mod typechecker;
 
 fn main() {
     match go() {
-        Ok(a) => todo!(),
-        Err(Error::Parse(p, _, s)) => println!("{}: {}", p.pretty(), s),
-        Err(e) => todo!()
+        Ok(()) => {}
+        Err(e) => println!("{}", e.pretty()),
     }
-    println!("Hello, world!");
 }
 
 fn go() -> Result<(), Error> {
-    let chars = read_to_string("sample.llp").map_err(|_| panic!())?;
-    parser::parse_file(&mut parser::ParserData{src_iter: chars.chars(), pos: Pos{src_name:"sample.llp".to_string(),line:1,col:1}, expected: None})?;
+    let (_checked, _ty) = load_and_typecheck("sample")?;
     Ok(())
+}
+
+// Recursively parse and typecheck a file, resolving its imports first.
+// `path` is the file path without the `.llp` extension.
+// Returns the checked definitions and the module's exported object type.
+fn load_and_typecheck(
+    path: &str,
+) -> Result<(HashMap<String, (Vec<(String, Type)>, Type, Term)>, Type), Error> {
+    let src = read_to_string(format!("{}.llp", path)).map_err(|_| panic!("file not found: {}.llp", path))?;
+    let (defs, import_paths) = parser::parse_file(&mut parser::ParserData {
+        src_iter: src.chars(),
+        pos: Pos { src_name: path.to_string(), line: 1, col: 1 },
+        expected: None,
+    })?;
+
+    let mut imports: HashMap<String, Type> = HashMap::new();
+    for segments in import_paths {
+        let import_path = segments.join("/");
+        let import_name = segments.last().expect("empty import path").clone();
+        let (_checked, import_ty) = load_and_typecheck(&import_path)?;
+        imports.insert(import_name, import_ty);
+    }
+
+    typechecker::typecheck_file(&defs, &imports)
 }

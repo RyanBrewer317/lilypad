@@ -1,5 +1,7 @@
-fn main(n: {case(any): int}) : int =
+import stdlib/test
+
+fn main(n: {case({some(any):int,none:int}): int}) : int =
   n.case{
-    some(x: int) = x,
-    none = 2
+    some(x) => x,
+    none => test.val()
   }
