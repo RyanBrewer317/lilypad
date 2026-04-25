@@ -2,7 +2,7 @@ use crate::common::*;
 use std::collections::HashMap;
 
 struct Ctx<'f> {
-    // De Bruijn levels: index 0 = first param, higher = deeper
+    // De Bruijn indices
     locals: Vec<(String, Type)>,
     // Methods of the enclosing object; always the content of a Type::Object
     this_methods: Vec<(String, Vec<Type>, Type)>,
@@ -16,9 +16,10 @@ impl<'f> Ctx<'f> {
     }
 
     fn lookup_local(&self, name: &str) -> Option<(i64, &Type)> {
+        let len = self.locals.len();
         for (i, (n, ty)) in self.locals.iter().enumerate() {
             if n == name {
-                return Some((i as i64, ty));
+                return Some(((len - i - 1) as i64, ty));
             }
         }
         None
@@ -66,7 +67,7 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
 
         Syntax::Ident(pos, name) => {
             if let Some((idx, ty)) = ctx.lookup_local(name) {
-                Ok((Term::Local(pos.clone(), idx, name.clone()), ty.clone()))
+                Ok((Term::Local(pos.clone(), idx, name.clone(), ty.clone()), ty.clone()))
             } else if name == "this" {
                 Ok((Term::Builtin(pos.clone(), "this".to_string()), ctx.this_ty()))
             } else if let Some((_, params, ret_ty)) = ctx.lookup_file_this_method(name) {
@@ -202,11 +203,11 @@ fn object_type_of(methods: &HashMap<String, (Vec<(String, Type)>, Type, Term)>) 
 //
 // Returns the checked definitions and the file's own object type (for use by importers).
 pub fn typecheck_file(
-    defs: &HashMap<String, (Vec<(String, Type)>, Type, Syntax)>,
+    defs: &HashMap<String, (Pos, Vec<(String, Type)>, Type, Syntax)>,
     imports: &HashMap<String, Type>,
-) -> Result<(HashMap<String, (Vec<(String, Type)>, Type, Term)>, Type), Error> {
+) -> Result<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Term)>, Type), Error> {
     let mut this_methods: Vec<(String, Vec<Type>, Type)> = defs.iter()
-        .map(|(name, (params, ret_ty, _))| {
+        .map(|(name, (pos, params, ret_ty, _))| {
             let param_tys = params.iter().map(|(_, t)| t.clone()).collect();
             (name.clone(), param_tys, ret_ty.clone())
         })
@@ -217,18 +218,18 @@ pub fn typecheck_file(
     }
 
     let mut out = HashMap::new();
-    for (name, (params, ret_ty, body)) in defs {
+    for (name, (pos, params, ret_ty, body)) in defs {
         let mut locals = vec![];
         locals.extend_from_slice(params);
         let ctx = Ctx { locals, this_methods: this_methods.clone(), file_this_methods: &this_methods };
         let body_term = check(&ctx, body, ret_ty)?;
-        out.insert(name.clone(), (params.clone(), ret_ty.clone(), body_term));
+        out.insert(name.clone(), (pos.clone(), params.clone(), ret_ty.clone(), body_term));
     }
 
     // Exported type contains only the file's own methods, not re-exported imports
     let exported_ty = Type::Object(
         defs.iter()
-            .map(|(name, (params, ret_ty, _))| {
+            .map(|(name, (pos, params, ret_ty, _))| {
                 let param_tys = params.iter().map(|(_, t)| t.clone()).collect();
                 (name.clone(), param_tys, ret_ty.clone())
             })

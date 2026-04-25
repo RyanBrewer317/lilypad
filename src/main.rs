@@ -4,6 +4,7 @@ mod common;
 use crate::common::*;
 mod parser;
 mod typechecker;
+mod core;
 
 fn main() {
     match go() {
@@ -13,7 +14,21 @@ fn main() {
 }
 
 fn go() -> Result<(), Error> {
-    let (_checked, _ty) = load_and_typecheck("sample")?;
+    let (defs, _ty) = load_and_typecheck("sample")?;
+    let defs2 = core::go(defs);
+    for (name, params, stmt) in &defs2 {
+        let params_str = params
+            .iter()
+            .map(|(n, t)| format!("{}: {}", n, 
+                match t {
+                    Ok(t) => t.pretty(),
+                    Err(t) => "~".to_owned() + &t.pretty()
+                }
+            ))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("fn {}({}) = {}", name, params_str, stmt.pretty());
+    }
     Ok(())
 }
 
@@ -22,7 +37,7 @@ fn go() -> Result<(), Error> {
 // Returns the checked definitions and the module's exported object type.
 fn load_and_typecheck(
     path: &str,
-) -> Result<(HashMap<String, (Vec<(String, Type)>, Type, Term)>, Type), Error> {
+) -> Result<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Term)>, Type), Error> {
     let src = read_to_string(format!("{}.llp", path)).map_err(|_| panic!("file not found: {}.llp", path))?;
     let (defs, import_paths) = parser::parse_file(&mut parser::ParserData {
         src_iter: src.chars(),

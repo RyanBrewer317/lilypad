@@ -81,7 +81,7 @@ impl Pretty for Syntax {
                         .into_iter()
                         .map(|(method, params, def)| {
                             let params_str = params.iter().map(|(name, ty)| format!("{}: {}", name, ty.pretty())).collect::<Vec<_>>().join(", ");
-                            method.to_string() + "(" + &params_str + "): " + &def.pretty()
+                            method.to_string() + "(" + &params_str + ") => " + &def.pretty()
                         })
                         .collect::<Vec<String>>()
                         .join(", ")
@@ -99,7 +99,7 @@ impl Pretty for Syntax {
 
 #[derive(Clone, Debug)]
 pub enum Term {
-    Local(Pos, i64, String),
+    Local(Pos, i64, String, Type),
     Builtin(Pos, String),
     Int(Pos, i64),
     // methods: name -> (params with types, return type, body)
@@ -110,7 +110,7 @@ pub enum Term {
 impl Term {
     pub fn pos(&self) -> &Pos {
         match self {
-            Term::Local(pos, _, _) => pos,
+            Term::Local(pos, _, _, _) => pos,
             Term::Builtin(pos, _) => pos,
             Term::Int(pos, _) => pos,
             Term::Object(pos, _, _) => pos,
@@ -122,7 +122,7 @@ impl Term {
 impl Pretty for Term {
     fn pretty(self: &Self) -> String {
         match self {
-            Term::Local(_, i, ident) => format!("{}{}", ident, i),
+            Term::Local(_, i, ident, _) => format!("{}{}", ident, i),
             Term::Builtin(_, name) => format!("{}", name),
             Term::Int(_, i) => format!("{}", i),
             Term::Object(_, Some(name), _methods) => name.to_string(),
@@ -135,7 +135,7 @@ impl Pretty for Term {
                                 .map(|(n, t)| format!("{}: {}", n, t.pretty()))
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            format!("{}({}): {} = {}", method, params_str, ret_ty.pretty(), def.pretty())
+                            format!("{}({}): {} => {}", method, params_str, ret_ty.pretty(), def.pretty())
                         })
                         .collect::<Vec<String>>()
                         .join(", ")
@@ -151,7 +151,6 @@ impl Pretty for Term {
 pub enum Type {
     Int,
     Dynamic,
-    // methods: (name, param types, return type)
     Object(Vec<(String, Vec<Type>, Type)>),
 }
 impl Type {
@@ -179,8 +178,8 @@ impl Type {
 impl Pretty for Type {
     fn pretty(self: &Self) -> String {
         match self {
-            Type::Int => "Int".to_owned(),
-            Type::Dynamic => "Dynamic".to_owned(),
+            Type::Int => "int".to_owned(),
+            Type::Dynamic => "any".to_owned(),
             Type::Object(methods) => {
                 "{".to_owned()
                     + &methods
@@ -193,6 +192,122 @@ impl Pretty for Type {
                         .join(", ")
                     + "}"
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum CoreType {
+    Int,
+    Dynamic,
+    Object(Vec<(String, Vec<Result<Type, Type>>)>),
+}
+impl Pretty for CoreType {
+    fn pretty(self: &Self) -> String {
+        match self {
+            CoreType::Dynamic => "any".to_owned(),
+            CoreType::Int => "int".to_owned(),
+            CoreType::Object(methods) => 
+                "{".to_owned()
+                    + &methods
+                        .iter()
+                        .map(|(name, params)| {
+                            let params_str = params.iter().map(|p| 
+                                    match p {
+                                        Ok(t)=>t.pretty(), 
+                                        Err(t)=>"~".to_owned() + &t.pretty()
+                                    }
+                                ).collect::<Vec<_>>().join(", ");
+                            format!("{}({})", name, params_str)
+                        })
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                    + "}"
+        }
+    }
+}
+
+pub fn pretty_coretype(t: &Result<CoreType, CoreType>) -> String {
+    match t {
+        Ok(t) => t.pretty(),
+        Err(t) => "~".to_owned() + &t.pretty()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum CoreProd {
+    Local(Pos, i64, String, CoreType),
+    Builtin(Pos, String),
+    Int(Pos, i64),
+    Mu(Pos, CoreType, Box<CoreStmt>),
+    Object(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, CoreStmt)>),
+}
+impl Pretty for CoreProd {
+    fn pretty(&self) -> String {
+        match self {
+            CoreProd::Local(_, i, ident, _) => format!("{}{}", ident, i),
+            CoreProd::Builtin(_, name) => name.clone(),
+            CoreProd::Int(_, i) => format!("{}", i),
+            CoreProd::Mu(_, ty, stmt) => format!("mu('a: {}). {}", ty.pretty(), stmt.pretty()),
+            CoreProd::Object(_, Some(name), _) => name.clone(),
+            CoreProd::Object(_, None, methods) => {
+                "{".to_owned()
+                    + &methods
+                        .iter()
+                        .map(|(method, (params, stmt))| {
+                            let params_str = params
+                                .iter()
+                                .map(|(n, t)| format!("{}: {}", n, pretty_coretype(t)))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("{}({}) => {}", method, params_str, stmt.pretty())
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                    + "}"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum CoreCons {
+    Label(Pos, i64, CoreType),
+    MuTilde(Pos, String, CoreType, Box<CoreStmt>),
+    Access(Pos, String, Vec<Result<CoreProd, CoreCons>>)
+}
+impl Pretty for CoreCons {
+    fn pretty(&self) -> String {
+        match self {
+            CoreCons::Label(_, i, _) => format!("'a{}", i),
+            CoreCons::MuTilde(_, name, ty, stmt) => {
+                format!("mu~({}: {}). {}", name, ty.pretty(), stmt.pretty())
+            }
+            CoreCons::Access(_, method, args) => {
+                let args_str = args
+                    .iter()
+                    .map(|a| match a {
+                        Ok(p) => p.pretty(),
+                        Err(c) => c.pretty(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(".{}({})", method, args_str)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum CoreStmt {
+    Cut(Pos, CoreProd, CoreCons),
+    Halt(Pos, i64, String)
+}
+impl Pretty for CoreStmt {
+    fn pretty(&self) -> String {
+        match self {
+            CoreStmt::Cut(_, prod, cons) => format!("<{} | {}>", prod.pretty(), cons.pretty()),
+            CoreStmt::Halt(_, i, name) => format!("halt({}{})", name, i),
         }
     }
 }

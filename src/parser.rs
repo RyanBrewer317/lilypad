@@ -353,17 +353,17 @@ pub fn parse_term<'p>(data: &mut ParserData<'p>) -> ParserResult<Syntax> {
 }
 
 enum Declaration {
-    Def(String, Vec<(String, Type)>, Type, Syntax),
-    Import(Vec<String>),
+    Def(Pos, String, Vec<(String, Type)>, Type, Syntax),
+    Import(Pos, Vec<String>),
 }
 
-fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Vec<(String, Type)>, Type, Syntax))>, Vec<Vec<String>>) {
+fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Pos, Vec<(String, Type)>, Type, Syntax))>, Vec<Vec<String>>) {
     let mut defs = vec![];
     let mut imports = vec![];
     for decl in decls {
         match decl {
-            Declaration::Def(name, params, ret_ty, def) => defs.push((name, (params, ret_ty, def))),
-            Declaration::Import(path) => imports.push(path),
+            Declaration::Def(pos, name, params, ret_ty, def) => defs.push((name, (pos, params, ret_ty, def))),
+            Declaration::Import(_pos, path) => imports.push(path),
         }
     }
     (defs, imports)
@@ -414,6 +414,7 @@ fn parse_type_methods<'p>(data: &mut ParserData<'p>) -> ParserResult<Vec<(String
 }
 
 fn parse_decl<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
+    let pos = data.pos.clone();
     exact(data, "fn")?;
     commit(data, &whitespace)?;
     let name = commit(data, &ident_string)?;
@@ -423,20 +424,21 @@ fn parse_decl<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
     let ret_ty = commit(data, &parse_type)?;
     commit(data, &|d| the_char(d, '='))?;
     let body = commit(data, &parse_term)?;
-    Ok(Declaration::Def(name, params, ret_ty, body))
+    Ok(Declaration::Def(pos, name, params, ret_ty, body))
 }
 
 fn parse_import<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
+    let pos = data.pos.clone();
     exact(data, "import")?;
     commit(data, &whitespace)?;
     let path = commit(data, &|d| sep_by(d, &|d2| the_char(d2, '/'), &ident_string))?;
     whitespace0(data)?;
-    Ok(Declaration::Import(path))
+    Ok(Declaration::Import(pos, path))
 }
 
 pub fn parse_file<'p>(
     data: &mut ParserData<'p>,
-) -> ParserResult<(HashMap<String, (Vec<(String, Type)>, Type, Syntax)>, Vec<Vec<String>>)> {
+) -> ParserResult<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Syntax)>, Vec<Vec<String>>)> {
     let res = many(data, &|d| {
         whitespace0(d)?;
         one_of(d, &[&parse_decl, &parse_import])
