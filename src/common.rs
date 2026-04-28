@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 pub trait Pretty {
     fn pretty(self: &Self) -> String;
@@ -100,7 +100,7 @@ impl Pretty for Syntax {
 #[derive(Clone, Debug)]
 pub enum Term {
     Local(Pos, i64, String, Type),
-    Builtin(Pos, String),
+    Builtin(Pos, String, Type),
     Int(Pos, i64),
     // methods: name -> (params with types, return type, body)
     Object(Pos, Option<String>, HashMap<String, (Vec<(String, Type)>, Type, Term)>),
@@ -111,7 +111,7 @@ impl Term {
     pub fn pos(&self) -> &Pos {
         match self {
             Term::Local(pos, _, _, _) => pos,
-            Term::Builtin(pos, _) => pos,
+            Term::Builtin(pos, _, _) => pos,
             Term::Int(pos, _) => pos,
             Term::Object(pos, _, _) => pos,
             Term::Access(pos, _, _, _) => pos,
@@ -123,7 +123,7 @@ impl Pretty for Term {
     fn pretty(self: &Self) -> String {
         match self {
             Term::Local(_, i, ident, _) => format!("{}{}", ident, i),
-            Term::Builtin(_, name) => format!("{}", name),
+            Term::Builtin(_, name, _) => format!("{}", name),
             Term::Int(_, i) => format!("{}", i),
             Term::Object(_, Some(name), _methods) => name.to_string(),
             Term::Object(_, None, methods) => {
@@ -200,7 +200,7 @@ impl Pretty for Type {
 pub enum CoreType {
     Int,
     Dynamic,
-    Object(Vec<(String, Vec<Result<Type, Type>>)>),
+    Object(Vec<(String, Vec<Result<CoreType, CoreType>>)>),
 }
 impl Pretty for CoreType {
     fn pretty(self: &Self) -> String {
@@ -242,6 +242,32 @@ pub enum CoreProd {
     Mu(Pos, CoreType, Box<CoreStmt>),
     Object(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, CoreStmt)>),
 }
+impl CoreProd {
+    pub fn pos(&self) -> Pos {
+        match self {
+            Self::Local(p, _, _, _) => p.clone(),
+            Self::Builtin(p, _) => p.clone(),
+            Self::Int(p, _) => p.clone(),
+            Self::Mu(p, _, _) => p.clone(),
+            Self::Object(p, _, _) => p.clone()
+        }
+    }
+    pub fn type_(&self) -> CoreType {
+        match self {
+            Self::Local(_, _, _, ty) => ty.clone(),
+            Self::Builtin(_, _) => todo!(),
+            Self::Int(_, _) => CoreType::Int,
+            Self::Mu(_, ty, _) => ty.clone(),
+            Self::Object(_, _, methods) => {
+                let mut out = vec![];
+                for (name, (params, def)) in methods {
+                    out.push((name.clone(), params.into_iter().map(|(_,t)|t.clone()).collect()))
+                }
+                CoreType::Object(out)
+            }
+        }
+    }
+}
 impl Pretty for CoreProd {
     fn pretty(&self) -> String {
         match self {
@@ -274,7 +300,23 @@ impl Pretty for CoreProd {
 pub enum CoreCons {
     Label(Pos, i64, CoreType),
     MuTilde(Pos, String, CoreType, Box<CoreStmt>),
-    Access(Pos, String, Vec<Result<CoreProd, CoreCons>>)
+    Access(Pos, String, Vec<Result<CoreProd, CoreCons>>, CoreType)
+}
+impl CoreCons {
+    pub fn pos(&self) -> Pos {
+        match self {
+            Self::Label(p, _, _) => p.clone(),
+            Self::Access(p, _, _, _) => p.clone(),
+            Self::MuTilde(p, _, _, _) => p.clone()
+        }
+    }
+    pub fn type_(&self) -> CoreType {
+        match self {
+            Self::Label(_, _, ty) => ty.clone(),
+            Self::Access(_, _, _, obty) => obty.clone(),
+            Self::MuTilde(_, _, ty, _) => ty.clone()
+        }
+    }
 }
 impl Pretty for CoreCons {
     fn pretty(&self) -> String {
@@ -283,7 +325,7 @@ impl Pretty for CoreCons {
             CoreCons::MuTilde(_, name, ty, stmt) => {
                 format!("mu~({}: {}). {}", name, ty.pretty(), stmt.pretty())
             }
-            CoreCons::Access(_, method, args) => {
+            CoreCons::Access(_, method, args, _) => {
                 let args_str = args
                     .iter()
                     .map(|a| match a {
@@ -311,3 +353,4 @@ impl Pretty for CoreStmt {
         }
     }
 }
+

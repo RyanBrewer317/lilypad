@@ -15,6 +15,10 @@ impl<'f> Ctx<'f> {
         Type::Object(self.this_methods.clone())
     }
 
+    fn file_this_ty(&self) -> Type {
+        Type::Object(Vec::from(self.file_this_methods))
+    }
+
     fn lookup_local(&self, name: &str) -> Option<(i64, &Type)> {
         let len = self.locals.len();
         for (i, (n, ty)) in self.locals.iter().enumerate() {
@@ -69,11 +73,12 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
             if let Some((idx, ty)) = ctx.lookup_local(name) {
                 Ok((Term::Local(pos.clone(), idx, name.clone(), ty.clone()), ty.clone()))
             } else if name == "this" {
-                Ok((Term::Builtin(pos.clone(), "this".to_string()), ctx.this_ty()))
+                let ty = ctx.this_ty();
+                Ok((Term::Builtin(pos.clone(), "this".to_string(), ty.clone()), ty))
             } else if let Some((_, params, ret_ty)) = ctx.lookup_file_this_method(name) {
                 // Desugar bare name to `file_this.name()` for zero-arg file-level methods
                 if params.is_empty() {
-                    let file_this = Term::Builtin(pos.clone(), "file_this".to_string());
+                    let file_this = Term::Builtin(pos.clone(), "file_this".to_string(), ctx.file_this_ty());
                     Ok((Term::Access(pos.clone(), Box::new(file_this), name.clone(), vec![]), ret_ty.clone()))
                 } else {
                     Err(Error::Type(pos.clone(), format!("unbound variable `{}`", name)))
@@ -96,7 +101,7 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
             let args = arg_syns.iter().zip(param_tys.iter())
                 .map(|(a, pt)| check(ctx, a, pt))
                 .collect::<Result<Vec<_>, _>>()?;
-            let file_this = Term::Builtin(pos.clone(), "file_this".to_string());
+            let file_this = Term::Builtin(pos.clone(), "file_this".to_string(), ctx.file_this_ty());
             Ok((Term::Access(pos.clone(), Box::new(file_this), name.clone(), args), ret_ty))
         }
 
