@@ -5,6 +5,7 @@ use crate::common::*;
 mod parser;
 mod typechecker;
 mod core;
+mod optimize;
 
 fn main() {
     match go() {

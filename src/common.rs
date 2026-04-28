@@ -147,6 +147,27 @@ impl Pretty for Term {
     }
 }
 
+pub fn shift(t: Term, n: i64, depth: i64) -> Term {
+    match t {
+        Term::Local(p, i, s, ty) => 
+            if depth <= i {
+                Term::Local(p, i+n, s, ty)
+            } else { 
+                Term::Local(p, i, s, ty)
+             },
+        Term::Object(p, mb_name, methods) =>
+            Term::Object(p, mb_name, methods.into_iter().map(|(k,(a,b,c))| {
+                let depth2 = depth+(a.len() as i64);
+                (k,(a,b,shift(c,n,depth2)))
+            }).collect()),
+        Term::Access(p, ob, s, args) => 
+            Term::Access(p, Box::new(shift(*ob, n, depth)), s, args.into_iter().map(|a| shift(a,n,depth)).collect()),
+        Term::Let(p,s,ty,v,e) =>
+            Term::Let(p, s, ty, Box::new(shift(*v, n, depth)), Box::new(shift(*e, n, depth+1))),
+        _ => t
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Type {
     Int,
@@ -354,3 +375,110 @@ impl Pretty for CoreStmt {
     }
 }
 
+pub fn shiftstmt(s: CoreStmt, n: i64, depth: i64) -> CoreStmt {
+    match s {
+        CoreStmt::Cut(p, prod, cons) =>
+            CoreStmt::Cut(p, shiftprod(prod, n, depth), shiftcons(cons, n, depth)),
+        CoreStmt::Halt(p, i, s) =>
+            if depth <= i {
+                CoreStmt::Halt(p, i+n, s)
+            } else { 
+                CoreStmt::Halt(p, i, s)
+             }
+    }
+}
+
+pub fn shiftprod(p: CoreProd, n: i64, depth: i64) -> CoreProd {
+    match p {
+        CoreProd::Local(p, i, s, ty) => 
+            if depth <= i {
+                CoreProd::Local(p, i+n, s, ty)
+            } else { 
+                CoreProd::Local(p, i, s, ty)
+             },
+        CoreProd::Object(p, mb_name, methods) =>
+            CoreProd::Object(p, mb_name, methods.into_iter().map(|(k,(a,b))| {
+                let depth2 = depth+(a.len() as i64);
+                (k,(a,shiftstmt(b,n,depth2)))
+            }).collect()),
+        CoreProd::Mu(p, ty, stmt) => 
+            CoreProd::Mu(p, ty, Box::new(shiftstmt(*stmt, n, depth+1))),
+        _ => p
+    }
+}
+
+pub fn shiftcons(c: CoreCons, n: i64, depth: i64) -> CoreCons {
+    match c {
+        CoreCons::Access(p, s, args, ty) => 
+            CoreCons::Access(p, s, args.into_iter().map(|a| a.map(|a|shiftprod(a,n,depth)).map_err(|a|shiftcons(a,n,depth))).collect(), ty),
+        CoreCons::Label(p, i, ty) => 
+            if depth <= i {
+                CoreCons::Label(p, i+n, ty)
+            } else { 
+                CoreCons::Label(p, i, ty)
+            },
+        CoreCons::MuTilde(p, s, ty, stmt) => 
+            CoreCons::MuTilde(p, s, ty, Box::new(shiftstmt(*stmt, n, depth+1)))
+    }
+}
+
+pub type ShrunkArg = Result<(Pos, i64, String, CoreType), (Pos, i64, CoreType)>;
+
+fn pretty_shrunk_arg(a: &ShrunkArg) -> String {
+    match a {
+        Ok((_, i, name, _)) => format!("{}{}", name, i),
+        Err((_, i, _)) => format!("'a{}", i),
+    }
+}
+
+fn pretty_shrunk_methods(methods: &HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)>) -> String {
+    methods.iter().map(|(m, (params, s))| {
+        let ps = params.iter().map(|(n, t)| format!("{}: {}", n, pretty_coretype(t))).collect::<Vec<_>>().join(", ");
+        format!("{}({}) => {}", m, ps, s.pretty())
+    }).collect::<Vec<_>>().join(", ")
+}
+
+// Post-shrinking IR. Valid cuts: no critical pairs, no known reductions.
+#[derive(Clone, Debug)]
+pub enum ShrunkStmt {
+    // < mu 'a: T. s | .m(args) >
+    MuCall(Pos, Box<ShrunkStmt>, String, Vec<ShrunkArg>, CoreType),
+    // < x | .m(args) >
+    VarCall(Pos, i64, String, String, Vec<ShrunkArg>, CoreType),
+    // < {...} | 'a >
+    ObjRet(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)>, Pos, i64, CoreType),
+    // < {...} | mu~ x: T. s >
+    ObjBind(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)>, String, CoreType, Box<ShrunkStmt>),
+    // < n | mu~ x: int. s >
+    IntBind(Pos, i64, String, Box<ShrunkStmt>),
+    // halt(x)
+    Halt(Pos, i64, String),
+}
+impl Pretty for ShrunkStmt {
+    fn pretty(&self) -> String {
+        match self {
+            ShrunkStmt::MuCall(_, s, m, args, ty) => {
+                let as_ = args.iter().map(pretty_shrunk_arg).collect::<Vec<_>>().join(", ");
+                format!("<mu('a: {}). {} | .{}({})>", ty.pretty(), s.pretty(), m, as_)
+            }
+            ShrunkStmt::VarCall(_, i, name, m, args, _) => {
+                let as_ = args.iter().map(pretty_shrunk_arg).collect::<Vec<_>>().join(", ");
+                format!("<{}{} | .{}({})>", name, i, m, as_)
+            }
+            ShrunkStmt::ObjRet(_, mb_name, methods, _, ai, _) => {
+                let obj = mb_name.as_deref().unwrap_or_else(|| "");
+                if mb_name.is_some() {
+                    format!("<{} | 'a{}>", obj, ai)
+                } else {
+                    format!("<{{{}}} | 'a{}>", pretty_shrunk_methods(methods), ai)
+                }
+            }
+            ShrunkStmt::ObjBind(_, mb_name, methods, x, ty, s) => {
+                let obj = if mb_name.is_some() { mb_name.as_deref().unwrap().to_string() } else { format!("{{{}}}", pretty_shrunk_methods(methods)) };
+                format!("<{} | mu~({}: {}). {}>", obj, x, ty.pretty(), s.pretty())
+            }
+            ShrunkStmt::IntBind(_, n, x, s) => format!("<{} | mu~({}). {}>", n, x, s.pretty()),
+            ShrunkStmt::Halt(_, i, name) => format!("halt({}{})", name, i),
+        }
+    }
+}

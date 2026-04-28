@@ -24,27 +24,6 @@ pub fn go(defs: HashMap<String, (Pos, Vec<(String, Type)>, Type, Term)>) -> Vec<
     out
 }
 
-fn shift(t: Term, n: i64, depth: i64) -> Term {
-    match t {
-        Term::Local(p, i, s, ty) => 
-            if depth <= i {
-                Term::Local(p, i+n, s, ty)
-            } else { 
-                Term::Local(p, i, s, ty)
-             },
-        Term::Object(p, mb_name, methods) =>
-            Term::Object(p, mb_name, methods.into_iter().map(|(k,(a,b,c))| {
-                let depth2 = depth+(a.len() as i64);
-                (k,(a,b,shift(c,n,depth2)))
-            }).collect()),
-        Term::Access(p, ob, s, args) => 
-            Term::Access(p, Box::new(shift(*ob, n, depth)), s, args.into_iter().map(|a| shift(a,n,depth)).collect()),
-        Term::Let(p,s,ty,v,e) =>
-            Term::Let(p, s, ty, Box::new(shift(*v, n, depth)), Box::new(shift(*e, n, depth+1))),
-        _ => t
-    }
-}
-
 fn gettype(t: &Term) -> Type {
     match t {
         Term::Int(_, _) => Type::Int,
@@ -120,53 +99,6 @@ fn type_(old: Type) -> CoreType {
         }
         Type::Dynamic => CoreType::Dynamic,
         Type::Int => CoreType::Int
-    }
-}
-
-fn shiftstmt(s: CoreStmt, n: i64, depth: i64) -> CoreStmt {
-    match s {
-        CoreStmt::Cut(p, prod, cons) =>
-            CoreStmt::Cut(p, shiftprod(prod, n, depth), shiftcons(cons, n, depth)),
-        CoreStmt::Halt(p, i, s) =>
-            if depth <= i {
-                CoreStmt::Halt(p, i+n, s)
-            } else { 
-                CoreStmt::Halt(p, i, s)
-             }
-    }
-}
-
-fn shiftprod(p: CoreProd, n: i64, depth: i64) -> CoreProd {
-    match p {
-        CoreProd::Local(p, i, s, ty) => 
-            if depth <= i {
-                CoreProd::Local(p, i+n, s, ty)
-            } else { 
-                CoreProd::Local(p, i, s, ty)
-             },
-        CoreProd::Object(p, mb_name, methods) =>
-            CoreProd::Object(p, mb_name, methods.into_iter().map(|(k,(a,b))| {
-                let depth2 = depth+(a.len() as i64);
-                (k,(a,shiftstmt(b,n,depth2)))
-            }).collect()),
-        CoreProd::Mu(p, ty, stmt) => 
-            CoreProd::Mu(p, ty, Box::new(shiftstmt(*stmt, n, depth+1))),
-        _ => p
-    }
-}
-
-fn shiftcons(c: CoreCons, n: i64, depth: i64) -> CoreCons {
-    match c {
-        CoreCons::Access(p, s, args, ty) => 
-            CoreCons::Access(p, s, args.into_iter().map(|a| a.map(|a|shiftprod(a,n,depth)).map_err(|a|shiftcons(a,n,depth))).collect(), ty),
-        CoreCons::Label(p, i, ty) => 
-            if depth <= i {
-                CoreCons::Label(p, i+n, ty)
-            } else { 
-                CoreCons::Label(p, i, ty)
-            },
-        CoreCons::MuTilde(p, s, ty, stmt) => 
-            CoreCons::MuTilde(p, s, ty, Box::new(shiftstmt(*stmt, n, depth+1)))
     }
 }
 
