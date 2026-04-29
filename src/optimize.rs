@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::common::*;
 
 pub fn go(defs: Vec<(String, Vec<(String, Result<CoreType, CoreType>)>, CoreStmt)>) -> Vec<(String, Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)> {
@@ -30,10 +32,30 @@ fn shrink_stmt(s: CoreStmt) -> ShrunkStmt {
                 }
             }
             shrink_stmt(shiftstmt(def, -len, 0))
-        }
+        },
+        CoreStmt::Cut(p, 
+                CoreProd::Mu(p2, CoreType::Object(methods), s1), 
+                CoreCons::MuTilde(p3, s, ty, s2)
+        ) => {
+            let mut methods2 = HashMap::new();
+            let shrunk = Box::new(shrink_stmt(*s1));
+            for (s, tys) in methods {
+                let mut params2 = vec![];
+                let mut args = vec![];
+                let mut i = tys.len() as i64;
+                for t in tys {
+                    i -= 1;
+                    params2.push(("$x".to_owned(), t.clone()));
+                    match t {
+                        Ok(pt) => args.push(Ok((p2.clone(), i, "$x".to_owned(), pt))),
+                        Err(ct) => args.push(Err((p2.clone(), i, ct)))
+                    }
+                }
+                methods2.insert(s.clone(), (params2, ShrunkStmt::MuCall(p2.clone(), shrunk.clone(), s, args, ty.clone())));
+            }
+            ShrunkStmt::ObjBind(p, None, methods2, s, ty, Box::new(shrink_stmt(*s2)))
+        },
         _=>todo!()
-        // < mu 'a: T. s1 | mu~ x: T. s2 > if T is Object => 
-        //   < { m(G..)=> < mu 'a: T. shrink(s1) | .m(G..) >, ... } | mu~ x: T. shrink(s2) >
         // < mu 'a: T. s1 | mu~ x: T. s2 > if T is int or any =>
         //   < { ret(x: T)=> shrink(s2) }
         //   | mu~ ob. < mu 'a: T. shrink(s1) | .case(ob) >
