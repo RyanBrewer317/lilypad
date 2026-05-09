@@ -281,7 +281,7 @@ impl CoreProd {
             Self::Mu(_, ty, _) => ty.clone(),
             Self::Object(_, _, methods) => {
                 let mut out = vec![];
-                for (name, (params, def)) in methods {
+                for (name, (params, _def)) in methods {
                     out.push((name.clone(), params.into_iter().map(|(_,t)|t.clone()).collect()))
                 }
                 CoreType::Object(out)

@@ -5,7 +5,7 @@ use crate::common::*;
 pub fn go(defs: Vec<(String, Vec<(String, Result<CoreType, CoreType>)>, CoreStmt)>) -> Vec<(String, Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)> {
     let mut out = vec![];
     let mut file_this_t_methods = vec![];
-    for (s,params,def) in &defs {
+    for (s,params,_def) in &defs {
         // println!("fn {}({}) = {}", s, params.len(), def.pretty());
         let mut params2 = vec![];
         for (_,t) in params {
@@ -180,22 +180,22 @@ fn shrink_stmt(s: CoreStmt) -> ShrunkStmt {
             shrink_stmt(shiftstmt(def, -len, 0))
         },
         CoreStmt::Cut(p, 
-                CoreProd::Object(p2, mb_name, methods), 
-                CoreCons::Label(p3, i, t)
+                CoreProd::Object(_, mb_name, methods), 
+                CoreCons::Label(_, i, t)
         ) => {
             let methods2 = methods.into_iter().map(|(a,(b,c))| (a,(b,shrink_stmt(c)))).collect();
             ShrunkStmt::ObjRet(p, mb_name, methods2, i, t)
         }
         CoreStmt::Cut(p, 
-                CoreProd::Object(p2, mb_name, methods), 
-                CoreCons::MuTilde(p3, s, t, stmt)
+                CoreProd::Object(_, mb_name, methods), 
+                CoreCons::MuTilde(_, s, t, stmt)
         ) => {
             let methods2 = methods.into_iter().map(|(a,(b,c))| (a,(b,shrink_stmt(c)))).collect();
             ShrunkStmt::ObjBind(p, mb_name, methods2, s, t, Box::new(shrink_stmt(*stmt)))
         }
         CoreStmt::Cut(p, 
                 CoreProd::Mu(p2, CoreType::Object(methods), s1), 
-                CoreCons::MuTilde(p3, s, ty, s2)
+                CoreCons::MuTilde(_, s, ty, s2)
         ) => {
             let mut methods2 = HashMap::new();
             for (s, tys) in methods {
@@ -230,7 +230,7 @@ fn shrink_stmt(s: CoreStmt) -> ShrunkStmt {
             ShrunkStmt::ObjBind(p, None, cases, "$ob".to_owned(), casesty, Box::new(mucall))
         }
         CoreStmt::Cut(p, 
-                CoreProd::Mu(p2, t, stmt), 
+                CoreProd::Mu(_, t, stmt), 
                 CoreCons::Access(_, s, args, _)
         ) => {
             let mut args2 = vec![];
@@ -291,7 +291,7 @@ fn shrink_stmt(s: CoreStmt) -> ShrunkStmt {
             let inner = ShrunkStmt::ObjRet(p3, None, method, i + 1, ctor_t);
             ShrunkStmt::IntBind(p, n, "$x".to_owned(), Box::new(inner))
         }
-        CoreStmt::Cut(p, CoreProd::Local(p2, i, s, _), CoreCons::Access(_, method, args, obty)) => {
+        CoreStmt::Cut(p, CoreProd::Local(_, i, s, _), CoreCons::Access(_, method, args, obty)) => {
             let shrunk_args = args.into_iter().map(|arg| match arg {
                 Ok(CoreProd::Local(ap, ai, aname, aty)) => Ok((ap, ai, aname, aty)),
                 Err(CoreCons::Label(ap, ai, aty)) => Err((ap, ai, aty)),

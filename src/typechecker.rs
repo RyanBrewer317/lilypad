@@ -227,7 +227,7 @@ pub fn typecheck_file(
 ) -> Result<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Term)>, Type), Error> {
     let mut file_ty_methods = file_ty_methods.clone();
     let mut this_methods: Vec<(String, Vec<Type>, Type)> = defs.iter()
-        .map(|(name, (pos, params, ret_ty, _))| {
+        .map(|(name, (_pos, params, ret_ty, _))| {
             let param_tys = params.iter().map(|(_, t)| t.clone()).collect();
             (name.clone(), param_tys, ret_ty.clone())
         })
@@ -256,7 +256,7 @@ pub fn typecheck_file(
     // Exported type contains only the file's own methods, not re-exported imports
     let exported_ty = Type::Object(
         defs.iter()
-            .map(|(name, (pos, params, ret_ty, _))| {
+            .map(|(name, (_pos, params, ret_ty, _))| {
                 let param_tys = params.iter().map(|(_, t)| t.clone()).collect();
                 (name.clone(), param_tys, ret_ty.clone())
             })
