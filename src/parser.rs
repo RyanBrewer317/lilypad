@@ -357,13 +357,13 @@ enum Declaration {
     Import(Pos, Vec<String>),
 }
 
-fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Pos, Vec<(String, Type)>, Type, Syntax))>, Vec<Vec<String>>) {
+fn partition(decls: Vec<Declaration>) -> (Vec<(String, (Pos, Vec<(String, Type)>, Type, Syntax))>, Vec<(Pos, Vec<String>)>) {
     let mut defs = vec![];
     let mut imports = vec![];
     for decl in decls {
         match decl {
             Declaration::Def(pos, name, params, ret_ty, def) => defs.push((name, (pos, params, ret_ty, def))),
-            Declaration::Import(_pos, path) => imports.push(path),
+            Declaration::Import(pos, path) => imports.push((pos, path)),
         }
     }
     (defs, imports)
@@ -438,7 +438,7 @@ fn parse_import<'p>(data: &mut ParserData<'p>) -> ParserResult<Declaration> {
 
 pub fn parse_file<'p>(
     data: &mut ParserData<'p>,
-) -> ParserResult<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Syntax)>, Vec<Vec<String>>)> {
+) -> ParserResult<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Syntax)>, Vec<(Pos, Vec<String>)>)> {
     let res = many(data, &|d| {
         whitespace0(d)?;
         one_of(d, &[&parse_decl, &parse_import])

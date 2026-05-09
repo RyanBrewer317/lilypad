@@ -105,9 +105,9 @@ fn type_(old: Type) -> CoreType {
 fn focus_stmt(stmt: CoreStmt) -> CoreStmt {
     match stmt {
         CoreStmt::Cut(p, ob, CoreCons::Access(p2, s, args, obty)) => 
-            listbindings(args, &|args2| 
+            listbindings(args, &|args2| {
                 CoreStmt::Cut(p.clone(), focus_prod(ob.clone()), CoreCons::Access(p2.clone(), s.clone(), args2, obty.clone()))
-            ),
+            }),
         CoreStmt::Cut(p, prod, cons) =>
             CoreStmt::Cut(p, focus_prod(prod), focus_cons(cons)),
         CoreStmt::Halt(_, _, _) => stmt
@@ -144,13 +144,16 @@ fn prodbindings(p: CoreProd, k: &dyn Fn(i64)->CoreStmt) -> CoreStmt {
                 CoreCons::MuTilde(pos, "a".to_owned(), ty, Box::new(shiftstmt(k(-1),1,-1)))
             ),
         CoreProd::Object(pos, mb_name, methods) => {
-            let objty = CoreType::Object(methods.iter().map(
-                |(k,(params,_))| (k.clone(),params.iter().map( |(_,t)| t.clone() ).collect())
-            ).collect());
+            let mut objty_methods = vec![];
+            let mut methods2 = HashMap::new();
+            for (s, (params, def)) in methods {
+                objty_methods.push((s.clone(), params.iter().map( |(_,t)| t.clone() ).collect()));
+                methods2.insert(s, (params, focus_stmt(def)));
+            }
             CoreStmt::Cut(
                 pos.clone(), 
-                CoreProd::Object(pos.clone(), mb_name, methods), 
-                CoreCons::MuTilde(pos, "$ob".to_owned(), objty, Box::new(shiftstmt(k(-1),1,-1)))
+                CoreProd::Object(pos.clone(), mb_name, methods2), 
+                CoreCons::MuTilde(pos, "$ob".to_owned(), CoreType::Object(objty_methods), Box::new(shiftstmt(k(-1),1,0)))
             )
         },
         CoreProd::Int(p, n) => 
@@ -169,14 +172,14 @@ fn consbindings(c: CoreCons, k: &dyn Fn(i64)->CoreStmt) -> CoreStmt {
         CoreCons::MuTilde(p, s, ty, stmt) => 
             CoreStmt::Cut(
                 p.clone(), 
-                CoreProd::Mu(p.clone(), ty.clone(), Box::new(shiftstmt(k(-1), 1, -1))), 
+                CoreProd::Mu(p.clone(), ty.clone(), Box::new(shiftstmt(k(-1),1,0))), 
                 CoreCons::MuTilde(p, s, ty, Box::new(focus_stmt(*stmt)))
             ),
         CoreCons::Access(p, s, args, obty) => 
             listbindings(args, &|args| 
                 CoreStmt::Cut(
                     p.clone(), 
-                    CoreProd::Mu(p.clone(), obty.clone(), Box::new(shiftstmt(k(-1), 1, -1))), 
+                    CoreProd::Mu(p.clone(), obty.clone(), Box::new(shiftstmt(k(-1),1,0))), 
                     CoreCons::Access(p.clone(), s.clone(), args, obty.clone())
                 ))
     }
@@ -207,6 +210,10 @@ fn listbindingshelper(args: &mut LinkedList<Result<CoreProd, CoreCons>>, k: &dyn
             })),
         Some(Err(c)) =>
             consbindings(c.clone(), &mut |i| listbindingshelper(&mut args.clone(), &mut |mut is| {
+                is.iter_mut().for_each(|i| match i {
+                    Ok(arg) => *i = Ok(shiftprod(arg.clone(), 1, 0)),
+                    Err(arg) => *i = Err(shiftcons(arg.clone(), 1, 0))
+                });
                 is.push_front(Err(CoreCons::Label(c.pos(), i, c.type_())));
                 k(is)
             }))

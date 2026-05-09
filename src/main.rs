@@ -17,7 +17,8 @@ fn main() {
 fn go() -> Result<(), Error> {
     let (defs, _ty) = load_and_typecheck("sample")?;
     let defs2 = core::go(defs);
-    for (name, params, stmt) in &defs2 {
+    let defs3 = optimize::go(defs2);
+    for (name, params, stmt) in &defs3 {
         let params_str = params
             .iter()
             .map(|(n, t)| format!("{}: {}", n, 
@@ -46,13 +47,26 @@ fn load_and_typecheck(
         expected: None,
     })?;
 
+    let mut out = HashMap::new();
+    let mut outt = Vec::new();
+
     let mut imports: HashMap<String, Type> = HashMap::new();
-    for segments in import_paths {
+    for (pos, segments) in import_paths {
         let import_path = segments.join("/");
         let import_name = segments.last().expect("empty import path").clone();
-        let (_checked, import_ty) = load_and_typecheck(&import_path)?;
-        imports.insert(import_name, import_ty);
+        let (checked, import_ty) = load_and_typecheck(&import_path)?;
+        imports.insert(import_name.clone(), import_ty.clone());
+        let mut import_methods = HashMap::new();
+        for (k, (_, params, t, def)) in checked {
+            import_methods.insert(k, (params, t, def));
+        }
+        out.insert(import_name.clone(), (pos.clone(), vec![], import_ty.clone(), Term::Object(pos, None, import_methods)));
+        outt.push((import_name, vec![], import_ty))
     }
 
-    typechecker::typecheck_file(&defs, &imports)
+    let (defs, t) = typechecker::typecheck_file(path.to_string(), &defs, &imports, &outt)?;
+    out.extend(defs);
+    let Type::Object(methods) = t else { panic!() };
+    outt.extend(methods);
+    Ok((out, Type::Object(outt)))
 }

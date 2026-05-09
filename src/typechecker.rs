@@ -2,12 +2,14 @@ use crate::common::*;
 use std::collections::HashMap;
 
 struct Ctx<'f> {
+    filepath: String,
     // De Bruijn indices
     locals: Vec<(String, Type)>,
     // Methods of the enclosing object; always the content of a Type::Object
     this_methods: Vec<(String, Vec<Type>, Type)>,
     // Methods of the file-level object; reference so it's never cloned
     file_this_methods: &'f [(String, Vec<Type>, Type)],
+    file_this_ty_methods: &'f [(String, Vec<Type>, Type)],
 }
 
 impl<'f> Ctx<'f> {
@@ -16,7 +18,7 @@ impl<'f> Ctx<'f> {
     }
 
     fn file_this_ty(&self) -> Type {
-        Type::Object(Vec::from(self.file_this_methods))
+        Type::Object(Vec::from(self.file_this_ty_methods))
     }
 
     fn lookup_local(&self, name: &str) -> Option<(i64, &Type)> {
@@ -46,7 +48,7 @@ fn check<'f>(ctx: &Ctx<'f>, syntax: &Syntax, expected: &Type) -> Result<Term, Er
         };
         let mut locals = ctx.locals.clone();
         locals.push((name.clone(), val_ty.clone()));
-        let inner_ctx = Ctx { locals, this_methods: ctx.this_methods.clone(), file_this_methods: ctx.file_this_methods };
+        let inner_ctx = Ctx { locals, filepath: ctx.filepath.clone(), this_methods: ctx.this_methods.clone(), file_this_methods: ctx.file_this_methods, file_this_ty_methods: ctx.file_this_ty_methods };
         let body_term = check(&inner_ctx, body_syn, expected)?;
         return Ok(Term::Let(pos.clone(), name.clone(), val_ty, Box::new(val_term), Box::new(body_term)));
     }
@@ -78,7 +80,7 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
             } else if let Some((_, params, ret_ty)) = ctx.lookup_file_this_method(name) {
                 // Desugar bare name to `file_this.name()` for zero-arg file-level methods
                 if params.is_empty() {
-                    let file_this = Term::Builtin(pos.clone(), "file_this".to_string(), ctx.file_this_ty());
+                    let file_this = file_this_path(Term::Builtin(pos.clone(), "file_this".to_owned(), ctx.file_this_ty()), ctx.filepath.clone());
                     Ok((Term::Access(pos.clone(), Box::new(file_this), name.clone(), vec![]), ret_ty.clone()))
                 } else {
                     Err(Error::Type(pos.clone(), format!("unbound variable `{}`", name)))
@@ -101,7 +103,8 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
             let args = arg_syns.iter().zip(param_tys.iter())
                 .map(|(a, pt)| check(ctx, a, pt))
                 .collect::<Result<Vec<_>, _>>()?;
-            let file_this = Term::Builtin(pos.clone(), "file_this".to_string(), ctx.file_this_ty());
+            let file_this = file_this_path(Term::Builtin(pos.clone(), "file_this".to_string(), ctx.file_this_ty()), ctx.filepath.clone());
+            println!("{}", file_this.pretty());
             Ok((Term::Access(pos.clone(), Box::new(file_this), name.clone(), args), ret_ty))
         }
 
@@ -122,7 +125,7 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
             };
             let mut locals = ctx.locals.clone();
             locals.push((name.clone(), val_ty.clone()));
-            let inner_ctx = Ctx { locals, this_methods: ctx.this_methods.clone(), file_this_methods: ctx.file_this_methods };
+            let inner_ctx = Ctx { locals, filepath: ctx.filepath.clone(), this_methods: ctx.this_methods.clone(), file_this_methods: ctx.file_this_methods, file_this_ty_methods: ctx.file_this_ty_methods };
             let (body_term, body_ty) = infer(&inner_ctx, body_syn)?;
             Ok((Term::Let(pos.clone(), name.clone(), val_ty, Box::new(val_term), Box::new(body_term)), body_ty))
         }
@@ -164,6 +167,15 @@ fn infer<'f>(ctx: &Ctx<'f>, syntax: &Syntax) -> Result<(Term, Type), Error> {
     }
 }
 
+fn file_this_path(start: Term, path: String) -> Term {
+    let pos = start.pos().clone();
+    let mut out = start;
+    for segment in path.split("/").skip(1) {
+        out = Term::Access(pos.clone(), Box::new(out), segment.to_string(), vec![]);
+    }
+    out
+}
+
 fn typecheck_methods<'f>(
     ctx: &Ctx<'f>,
     inner_this_methods: &[(String, Vec<Type>, Type)],
@@ -174,7 +186,7 @@ fn typecheck_methods<'f>(
     for (method_name, params, body) in methods {
         let mut locals = ctx.locals.clone();
         locals.extend_from_slice(params);
-        let inner_ctx = Ctx { locals, this_methods: inner_this_methods.to_vec(), file_this_methods: ctx.file_this_methods };
+        let inner_ctx = Ctx { locals, filepath: ctx.filepath.clone(), this_methods: inner_this_methods.to_vec(), file_this_methods: ctx.file_this_methods, file_this_ty_methods: ctx.file_this_ty_methods };
         let (body_term, ret_ty) = if let Some(exp_meths) = expected_methods {
             if let Some((_, _, exp_ret)) = exp_meths.iter().find(|(n, _, _)| n == method_name) {
                 let t = check(&inner_ctx, body, exp_ret)?;
@@ -208,15 +220,25 @@ fn object_type_of(methods: &HashMap<String, (Vec<(String, Type)>, Type, Term)>) 
 //
 // Returns the checked definitions and the file's own object type (for use by importers).
 pub fn typecheck_file(
+    filepath: String,
     defs: &HashMap<String, (Pos, Vec<(String, Type)>, Type, Syntax)>,
     imports: &HashMap<String, Type>,
+    file_ty_methods: &Vec<(String, Vec<Type>, Type)>,
 ) -> Result<(HashMap<String, (Pos, Vec<(String, Type)>, Type, Term)>, Type), Error> {
+    let mut file_ty_methods = file_ty_methods.clone();
     let mut this_methods: Vec<(String, Vec<Type>, Type)> = defs.iter()
         .map(|(name, (pos, params, ret_ty, _))| {
             let param_tys = params.iter().map(|(_, t)| t.clone()).collect();
             (name.clone(), param_tys, ret_ty.clone())
         })
         .collect();
+    
+    let segments = filepath.split("/").collect::<Vec<_>>();
+    if segments.len() > 0 {
+        file_ty_methods.push((segments.last().unwrap().to_string(), vec![], Type::Object(this_methods.clone())))
+    } else {
+        file_ty_methods = this_methods.clone();
+    }
 
     for (import_name, import_ty) in imports {
         this_methods.push((import_name.clone(), vec![], import_ty.clone()));
@@ -226,7 +248,7 @@ pub fn typecheck_file(
     for (name, (pos, params, ret_ty, body)) in defs {
         let mut locals = vec![];
         locals.extend_from_slice(params);
-        let ctx = Ctx { locals, this_methods: this_methods.clone(), file_this_methods: &this_methods };
+        let ctx = Ctx { locals, filepath: filepath.clone(), this_methods: this_methods.clone(), file_this_methods: &this_methods, file_this_ty_methods: &file_ty_methods };
         let body_term = check(&ctx, body, ret_ty)?;
         out.insert(name.clone(), (pos.clone(), params.clone(), ret_ty.clone(), body_term));
     }

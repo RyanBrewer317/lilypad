@@ -393,6 +393,8 @@ pub fn shiftprod(p: CoreProd, n: i64, depth: i64) -> CoreProd {
         CoreProd::Local(p, i, s, ty) => 
             if depth <= i {
                 CoreProd::Local(p, i+n, s, ty)
+            } else if i == -1 {
+                CoreProd::Local(p, n - 1, s, ty)
             } else { 
                 CoreProd::Local(p, i, s, ty)
              },
@@ -414,6 +416,8 @@ pub fn shiftcons(c: CoreCons, n: i64, depth: i64) -> CoreCons {
         CoreCons::Label(p, i, ty) => 
             if depth <= i {
                 CoreCons::Label(p, i+n, ty)
+            } else if i == -1 {
+                CoreCons::Label(p, n - 1, ty)
             } else { 
                 CoreCons::Label(p, i, ty)
             },
@@ -446,7 +450,7 @@ pub enum ShrunkStmt {
     // < x | .m(args) >
     VarCall(Pos, i64, String, String, Vec<ShrunkArg>, CoreType),
     // < {...} | 'a >
-    ObjRet(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)>, Pos, i64, CoreType),
+    ObjRet(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)>, i64, CoreType),
     // < {...} | mu~ x: T. s >
     ObjBind(Pos, Option<String>, HashMap<String, (Vec<(String, Result<CoreType, CoreType>)>, ShrunkStmt)>, String, CoreType, Box<ShrunkStmt>),
     // < n | mu~ x: int. s >
@@ -465,7 +469,7 @@ impl Pretty for ShrunkStmt {
                 let as_ = args.iter().map(pretty_shrunk_arg).collect::<Vec<_>>().join(", ");
                 format!("<{}{} | .{}({})>", name, i, m, as_)
             }
-            ShrunkStmt::ObjRet(_, mb_name, methods, _, ai, _) => {
+            ShrunkStmt::ObjRet(_, mb_name, methods, ai, _) => {
                 let obj = mb_name.as_deref().unwrap_or_else(|| "");
                 if mb_name.is_some() {
                     format!("<{} | 'a{}>", obj, ai)
